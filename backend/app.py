@@ -54,6 +54,30 @@ memory_store = {}  # Session-based memory storage
 db_initialized = False  # Flag to ensure DB init runs once
 
 
+def get_authorized_company_ids(user):
+    # group_admin: all companies
+    if user.role == "admin":
+        return [c.id for c in Company.query.all()]
+    # ceo: assigned company + direct children
+    if user.role == "ceo":
+        ids = [user.company_id] if user.company_id else []
+        children = Company.query.filter_by(
+            parent_company_id=user.company_id
+        ).all()
+        ids += [c.id for c in children]
+        return ids
+    # analyst: only assigned company
+    if user.role == "analyst":
+        return [user.company_id] if user.company_id else []
+    return []
+
+
+def require_group_admin(user):
+    if user.role != "admin":
+        return False
+    return True
+
+
 def initialize_ai_components():
     """Initialize AI components."""
     global llm, embeddings
