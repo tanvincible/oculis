@@ -31,7 +31,7 @@ def upload():
 
     # Save to temp file then read with pandas
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        fname = secure_filename(f.filename)  # strips dangerous chars
+        fname = secure_filename(f.filename)
         tmp.write(f.read())
         tmp_path = tmp.name
     try:

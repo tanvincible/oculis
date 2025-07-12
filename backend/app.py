@@ -3,6 +3,7 @@ Flask application entrypoint with AI/RAG capabilities
 Run:  `python app.py`
 """
 
+from flask_cors import CORS
 import os
 import json
 from dotenv import load_dotenv
@@ -38,6 +39,13 @@ app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret")
 
 db.init_app(app)
 app.register_blueprint(ingest_bp)
+
+# After Flask app initialization:
+CORS(
+    app,
+    supports_credentials=True,
+    origins=["http://localhost:5173", "http://localhost:3000"],
+)
 
 # Global AI components
 llm = None
@@ -280,6 +288,46 @@ def chat():
     except Exception as e:
         print(f"Error in chat endpoint: {e}")
         return {"error": f"Internal server error: {str(e)}"}, 500
+
+
+@app.get("/api/company_metrics/<int:company_id>")
+@login_required()
+def company_metrics(company_id):
+    user = g.current_user
+    company = Company.query.get(company_id)
+    if not company:
+        return {"error": "Company not found"}, 404
+    # RBAC: extend as needed for your production use-case
+
+    # Fetch metrics
+    entries = (
+        BalanceSheetEntry.query.filter_by(company_id=company_id)
+        .order_by(BalanceSheetEntry.year)
+        .all()
+    )
+    years = sorted({e.year for e in entries})
+    revenue = []
+    assets = []
+    liabilities = []
+    for y in years:
+        year_entries = [e for e in entries if e.year == y]
+
+        # Find metrics by name (case-insensitive)
+        def get_metric(name):
+            for e in year_entries:
+                if e.metric.lower() == name.lower():
+                    return float(e.value)
+            return None
+
+        revenue.append(get_metric("Revenue"))
+        assets.append(get_metric("Total Assets"))
+        liabilities.append(get_metric("Total Liabilities"))
+    return {
+        "years": years,
+        "revenue": revenue,
+        "assets": assets,
+        "liabilities": liabilities,
+    }
 
 
 # -------------------------------------------------------------------- #
