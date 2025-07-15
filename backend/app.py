@@ -334,8 +334,7 @@ def company_metrics(company_id):
     company = Company.query.get(company_id)
     if not company:
         return {"error": "Company not found"}, 404
-    # RBAC: extend as needed for your production use-case
-
+        
     # Fetch metrics
     entries = (
         BalanceSheetEntry.query.filter_by(company_id=company_id)
@@ -364,6 +363,7 @@ def company_metrics(company_id):
         "revenue": revenue,
         "assets": assets,
         "liabilities": liabilities,
+        "currency": "USD",
     }
 
 
