@@ -52,7 +52,6 @@ export default function DashboardPage() {
 
                     {selectedCompany && (
                         <div className="bg-white rounded-xl shadow-xl p-6 border border-gray-200">
-                            <h2 className="text-2xl font-bold text-gray-800 mb-4">📈 {selectedCompany.name} Financial Overview</h2>
                             <FinancialCharts
                                 companyId={selectedCompany.id}
                                 companyName={selectedCompany.name}
@@ -64,7 +63,7 @@ export default function DashboardPage() {
                 {selectedCompany && (
                     <div className="xl:w-[450px] w-full space-y-6">
                         <div className="bg-white rounded-xl shadow-xl p-6 border border-gray-200 h-full flex flex-col">
-                            <h2 className="text-xl font-bold text-gray-800 mb-4">💬 Ask AI about {selectedCompany.name}</h2>
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">💬 Ask Olingo: Oculis' AI</h2>
                             <ChatInterface
                                 companyId={selectedCompany.id}
                                 companyName={selectedCompany.name}
