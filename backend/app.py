@@ -6,6 +6,8 @@ Run:  `python app.py`
 from flask_cors import CORS
 import os
 import json
+import logging
+import asyncio
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, session, g
 from models import db, User, Company, BalanceSheetEntry
@@ -30,7 +32,7 @@ import chromadb
 # -------------------------------------------------------------------- #
 #  Config & initialization                                             #
 # -------------------------------------------------------------------- #
-load_dotenv()  # reads .env in project root
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///balance_sheet.db"
@@ -81,31 +83,42 @@ def require_group_admin(user):
 def initialize_ai_components():
     """Initialize AI components."""
     global llm, embeddings
+    
+    if llm is not None and embeddings is not None:
+        return llm, embeddings
 
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
-        print(
-            "⚠️  Warning: GEMINI_API_KEY not found. AI features will be disabled."
-        )
+        logging.warning("GEMINI_API_KEY not found. AI features will be disabled.")
         return False
 
     try:
+        # Ensure an event loop is running for grpc.aio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            logging.info("Created new asyncio event loop for AI component initialization.")
+
+        # Initialize LLM and Embeddings
         llm = ChatGoogleGenerativeAI(
             model="gemini-1.5-flash",
             google_api_key=gemini_api_key,
             temperature=0.1,
             max_output_tokens=1024,
         )
-
         embeddings = GoogleGenerativeAIEmbeddings(
             model="models/embedding-001", google_api_key=gemini_api_key
         )
-
-        print("✅ AI components initialized successfully")
-        return True
+        logging.info("AI components initialized successfully.")
+        return llm, embeddings
     except Exception as e:
-        print(f"❌ Error initializing AI components: {e}")
-        return False
+        logging.error(f"Error initializing AI components: {e}", exc_info=True)
+        llm = None
+        embeddings = None
+        return None, None
+
 
 
 @app.before_request

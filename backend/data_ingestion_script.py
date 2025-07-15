@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+print(os.getenv("GEMINI_API_KEY"))
 
 # Add the backend directory to Python path to import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
