@@ -28,32 +28,28 @@ export default function LoginPage() {
     };
 
     return (
-        <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 font-inter">
-            <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-200">
-                <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">Welcome Back</h2>
-                <form onSubmit={handleSubmit}>
-                    <div className="mb-5">
-                        <label className="block text-gray-700 text-sm font-semibold mb-2" htmlFor="username">
-                            Username
-                        </label>
+        <div className="flex items-center justify-center min-h-screen bg-neutral-950 font-inter p-4">
+            <div className="bg-neutral-900 p-10 rounded-3xl shadow-2xl w-full max-w-md border border-neutral-800 text-neutral-200">
+                <h2 className="text-4xl font-extrabold text-center mb-8 text-white tracking-tight">Oculis Portal</h2>
+                <form onSubmit={handleSubmit} className="space-y-5">
+                    <div>
+                        <label className="block text-sm font-semibold mb-2 text-neutral-400" htmlFor="username">Username</label>
                         <input
                             type="text"
                             id="username"
-                            className="shadow-sm appearance-none border border-gray-300 rounded-lg w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200"
+                            className="w-full py-3 px-4 rounded-xl bg-neutral-800 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-neutral-800 transition"
                             placeholder="Enter your username"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             required
                         />
                     </div>
-                    <div className="mb-6">
-                        <label className="block text-gray-700 text-sm font-semibold mb-2" htmlFor="password">
-                            Password
-                        </label>
+                    <div>
+                        <label className="block text-sm font-semibold mb-2 text-neutral-400" htmlFor="password">Password</label>
                         <input
                             type="password"
                             id="password"
-                            className="shadow-sm appearance-none border border-gray-300 rounded-lg w-full py-3 px-4 text-gray-700 mb-3 leading-tight focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition duration-200"
+                            className="w-full py-3 px-4 rounded-xl bg-neutral-800 text-white placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-neutral-800 transition"
                             placeholder="Enter your password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
@@ -61,16 +57,17 @@ export default function LoginPage() {
                         />
                     </div>
                     {error && (
-                        <p className="text-red-500 text-sm text-center mb-4">{error}</p>
+                        <p className="text-red-500 text-sm text-center">{error}</p>
                     )}
                     <button
                         type="submit"
-                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg focus:outline-none focus:shadow-outline transition duration-200 ease-in-out transform hover:scale-105 shadow-md"
+                        className={`w-full !bg-white text-neutral-900 font-bold py-3 rounded-xl border border-neutral-300 shadow-md hover:bg-neutral-100 hover:border-neutral-400 transition-all transform hover:scale-[1.02] active:scale-100 duration-200`}
                         disabled={loading}
                     >
                         {loading ? 'Logging in...' : 'Login'}
                     </button>
                 </form>
+                <p className="text-xs text-center text-neutral-500 mt-6">© {new Date().getFullYear()} Oculis Technologies</p>
             </div>
         </div>
     );
