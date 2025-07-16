@@ -1,398 +1,700 @@
-"""
-Flask application entrypoint with AI/RAG capabilities
-Run:  `python app.py`
-"""
+# backend/app.py
 
-from flask_cors import CORS
 import os
 import json
+from flask import Flask, jsonify, request, g
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, unset_jwt_cookies
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import timedelta
 import logging
-import asyncio
-from dotenv import load_dotenv
-from flask import Flask, request, jsonify, session, g
-from models import db, User, Company, BalanceSheetEntry
-from auth import login_required, SESSION_USER_ID, hash_pwd, verify_pwd
-import models  # to register constants
-from ingest import bp as ingest_bp
+from functools import wraps
+import click
+from flask_cors import CORS
 
-# LangChain and AI imports
-from langchain_google_genai import (
-    ChatGoogleGenerativeAI,
-    GoogleGenerativeAIEmbeddings,
-)
-from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-import chromadb
+# Import models module itself, not just its contents, to pass as 'models' argument
+import models # Added this line
+from models import db, User, Company, BalanceSheet, ROLE_ADMIN, ROLE_CEO, ROLE_ANALYST
+from ai_model import initialize_ai_components, generate_chat_response, extract_financial_data_from_pdf, load_pdf_to_vectorstore, delete_vectors_for_balance_sheet
 
-# -------------------------------------------------------------------- #
-#  Config & initialization                                             #
-# -------------------------------------------------------------------- #
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env'))
+# Logger setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///balance_sheet.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret")
-
-db.init_app(app)
-app.register_blueprint(ingest_bp)
-
-# After Flask app initialization:
-CORS(
-    app,
-    supports_credentials=True,
-    origins=["http://localhost:5173", "http://localhost:3000"],
-)
-
-# Global AI components
+# Global AI components (initialized in create_app)
 llm = None
 embeddings = None
-memory_store = {}  # Session-based memory storage
-db_initialized = False  # Flag to ensure DB init runs once
 
+# --- Helper Functions (keep these as they are) ---
+
+def hash_pwd(password):
+    return generate_password_hash(password)
 
 def get_authorized_company_ids(user):
-    # group_admin: all companies
-    if user.role == "admin":
+    """
+    Determines which company IDs a user is authorized to view.
+    """
+    if user.role == ROLE_ADMIN:
+        # Admins can see all companies
         return [c.id for c in Company.query.all()]
-    # ceo: assigned company + direct children
-    if user.role == "ceo":
-        ids = [user.company_id] if user.company_id else []
-        children = Company.query.filter_by(
-            parent_company_id=user.company_id
-        ).all()
-        ids += [c.id for c in children]
-        return ids
-    # analyst: only assigned company
-    if user.role == "analyst":
+    elif user.role == ROLE_CEO:
+        # CEOs can see their assigned company and any direct child companies
+        ceo_company = Company.query.get(user.company_id)
+        if ceo_company:
+            authorized_ids = [ceo_company.id]
+            child_companies = Company.query.filter_by(parent_company_id=ceo_company.id).all()
+            authorized_ids.extend([c.id for c in child_companies])
+            return list(set(authorized_ids)) # Use set to remove duplicates
+        return []
+    elif user.role == ROLE_ANALYST:
+        # Analysts can only see their assigned company
         return [user.company_id] if user.company_id else []
     return []
 
 
-def require_group_admin(user):
-    if user.role != "admin":
-        return False
-    return True
+def require_role(roles):
+    """Decorator to restrict access based on user roles."""
+    def wrapper(fn):
+        @wraps(fn)
+        @jwt_required()
+        def decorator(*args, **kwargs):
+            # get_jwt_identity() will now return a string (the user ID)
+            g.current_user = User.query.get(int(get_jwt_identity())) # Cast back to int for DB query
+            if g.current_user is None or g.current_user.role not in roles:
+                logger.warning(f"Unauthorized access attempt by user {g.current_user.username if g.current_user else 'None'} with role {g.current_user.role if g.current_user else 'None'}. Required roles: {roles}")
+                return jsonify({"msg": "Forbidden: Insufficient permissions"}), 403
+            return fn(*args, **kwargs)
+        return decorator
+    return wrapper
 
+# --- Application Factory Function ---
 
-def initialize_ai_components():
-    """Initialize AI components."""
+def create_app():
+    app = Flask(__name__)
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///my_balance_sheet_db.sqlite"
+    app.config["JWT_SECRET_KEY"] = os.environ.get("JWT_SECRET_KEY", "super-secret-jwt-key")
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
+    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+    # Initialize CORS for your frontend origin
+    CORS(
+        app,
+        resources={r"/api/*": {"origins": "http://localhost:5173"}},
+        supports_credentials=True, # Allow cookies/authentication headers to be sent
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], # Explicitly allow methods
+        allow_headers=["Content-Type", "Authorization"] # Explicitly allow headers
+    )
+
+    db.init_app(app) # Initialize SQLAlchemy with the app
+    jwt = JWTManager(app) # Initialize JWTManager with the app
+
+    # Initialize AI components
     global llm, embeddings
-    
-    if llm is not None and embeddings is not None:
-        return llm, embeddings
+    llm, embeddings = initialize_ai_components() # This now returns the initialized objects
 
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key:
-        logging.warning("GEMINI_API_KEY not found. AI features will be disabled.")
-        return False
-
-    try:
-        # Ensure an event loop is running for grpc.aio
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            logging.info("Created new asyncio event loop for AI component initialization.")
-
-        # Initialize LLM and Embeddings
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
-            google_api_key=gemini_api_key,
-            temperature=0.1,
-            max_output_tokens=1024,
-        )
-        embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/embedding-001", google_api_key=gemini_api_key
-        )
-        logging.info("AI components initialized successfully.")
-        return llm, embeddings
-    except Exception as e:
-        logging.error(f"Error initializing AI components: {e}", exc_info=True)
-        llm = None
-        embeddings = None
-        return None, None
-
-
-
-@app.before_request
-def setup_app():
-    """Runs before every request; initializes AI and DB once."""
-    global llm, embeddings, db_initialized
-
-    if llm is None or embeddings is None:
-        initialize_ai_components()
-
-    if not db_initialized:
+    # --- CLI Command for Database Seeding ---
+    @app.cli.command('seed-db')
+    @click.option('--force', is_flag=True, help='Force re-seeding even if users exist.')
+    def seed_db_command(force):
+        """Initializes the database and seeds initial users and companies."""
         with app.app_context():
-            db.create_all()
-            if not User.query.first():
+            db.create_all() # Ensure tables are created
+
+            if force or not User.query.first():
+                logger.info("Seeding initial users and companies...")
+
+                # Clear existing data if force is true or no users exist
+                if force:
+                    db.session.query(BalanceSheet).delete()
+                    db.session.query(User).delete()
+                    db.session.query(Company).delete()
+                    db.session.commit()
+                    logger.info("Cleared existing database data.")
+
+                # Admin User
                 admin = User(
-                    username="admin",
-                    password_hash=hash_pwd("admin123"),
-                    role=models.ROLE_ADMIN,
+                    username="ambani_family",
+                    password_hash=hash_pwd("adminpass"),
+                    role=ROLE_ADMIN,
+                    email="admin@example.com"
                 )
                 db.session.add(admin)
 
-                sample_path = os.path.join(
-                    os.path.dirname(__file__), "seed_data", "sample_users.json"
-                )
-                if os.path.exists(sample_path):
-                    data = json.load(open(sample_path))
-                    for u in data:
-                        db.session.add(
-                            User(
-                                username=u["username"],
-                                password_hash=hash_pwd(u["password"]),
-                                role=u["role"],
-                            )
-                        )
+                # Companies
+                reliance_industries = Company(name="Reliance Industries Ltd.", currency="INR")
+                jio_platforms = Company(name="Jio Platforms Ltd.", currency="INR")
+                reliance_retail = Company(name="Reliance Retail Ltd.", currency="INR")
+                tata_motors = Company(name="Tata Motors Ltd.", currency="INR")
+                infosys = Company(name="Infosys Ltd.", currency="INR")
+                wipro = Company(name="Wipro Ltd.", currency="INR")
+                dmart = Company(name="Avenue Supermarts Ltd. (DMart)", currency="INR")
+                hdfc_bank = Company(name="HDFC Bank Ltd.", currency="INR")
+
+                db.session.add_all([
+                    reliance_industries, jio_platforms, reliance_retail,
+                    tata_motors, infosys, wipro, dmart, hdfc_bank
+                ])
+                db.session.commit() # Commit companies to get their IDs
+
+                # Set up parent-child relationships after commit
+                jio_platforms.parent_company_id = reliance_industries.id
+                reliance_retail.parent_company_id = reliance_industries.id
                 db.session.commit()
-        db_initialized = True
+
+                # CEO Users
+                jio_ceo = User(
+                    username="jio_ceo",
+                    password_hash=hash_pwd("jioceo123"),
+                    role=ROLE_CEO,
+                    company_id=jio_platforms.id,
+                    email="jio.ceo@example.com"
+                )
+                reliance_retail_ceo = User(
+                    username="reliance_retail_ceo",
+                    password_hash=hash_pwd("retailceo123"),
+                    role=ROLE_CEO,
+                    company_id=reliance_retail.id,
+                    email="retail.ceo@example.com"
+                )
+                tata_motors_ceo = User(
+                    username="tata_motors_ceo",
+                    password_hash=hash_pwd("tataceo123"),
+                    role=ROLE_CEO,
+                    company_id=tata_motors.id,
+                    email="tata.ceo@example.com"
+                )
+                db.session.add_all([jio_ceo, reliance_retail_ceo, tata_motors_ceo])
 
 
-# -------------------------------------------------------------------- #
-#  Auth endpoints                                                      #
-# -------------------------------------------------------------------- #
-@app.post("/api/register")
-def register():
-    payload = request.json or {}
-    if not {"username", "password", "role"} <= payload.keys():
-        return {"error": "required: username, password, role"}, 400
-    if payload["role"] not in models.ALL_ROLES:
-        return {"error": f"role must be one of {models.ALL_ROLES}"}, 400
-    if User.query.filter_by(username=payload["username"]).first():
-        return {"error": "username taken"}, 409
-    user = User(
-        username=payload["username"],
-        password_hash=hash_pwd(payload["password"]),
-        role=payload["role"],
-    )
-    db.session.add(user)
-    db.session.commit()
-    return {"id": user.id}, 201
+                # Analyst Users
+                reliance_analyst = User(
+                    username="reliance_analyst",
+                    password_hash=hash_pwd("relanalyst123"),
+                    role=ROLE_ANALYST,
+                    company_id=reliance_industries.id,
+                    email="reliance.analyst@example.com"
+                )
+                jio_analyst = User(
+                    username="jio_analyst",
+                    password_hash=hash_pwd("jioanalyst123"),
+                    role=ROLE_ANALYST,
+                    company_id=jio_platforms.id,
+                    email="jio.analyst@example.com"
+                )
+                infosys_analyst = User(
+                    username="infosys_analyst",
+                    password_hash=hash_pwd("infy_anl"),
+                    role=ROLE_ANALYST,
+                    company_id=infosys.id,
+                    email="infosys.analyst@example.com"
+                )
+                dmart_analyst = User(
+                    username="dmart_analyst",
+                    password_hash=hash_pwd("dmart_anl"),
+                    role=ROLE_ANALYST,
+                    company_id=dmart.id,
+                    email="dmart.analyst@example.com"
+                )
+                db.session.add_all([reliance_analyst, jio_analyst, infosys_analyst, dmart_analyst])
+
+                db.session.commit()
+                logger.info("Users and companies seeded successfully.")
+            else:
+                logger.info("Database already contains users. Skipping seeding. Use 'flask seed-db --force' to re-seed.")
+
+    # --- Register Blueprints/Routes here (for a larger app) ---
+    # For this MVP, we'll keep routes directly in app.py for simplicity,
+    # but in a production app, you'd register blueprints here.
+
+    # --- Authentication and User Management Routes ---
+    @app.route('/api/register', methods=['POST'])
+    @require_role([ROLE_ADMIN])
+    def register():
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        role = data.get('role')
+        company_id = data.get('company_id')
+        email = data.get('email')
+
+        if not username or not password or not role:
+            return jsonify({"msg": "Missing username, password, or role"}), 400
+
+        if User.query.filter_by(username=username).first():
+            return jsonify({"msg": "User already exists"}), 409
+
+        if role not in [ROLE_ADMIN, ROLE_CEO, ROLE_ANALYST]:
+            return jsonify({"msg": "Invalid role specified"}), 400
+
+        if role != ROLE_ADMIN and not company_id:
+            return jsonify({"msg": "Company ID is required for CEO and Analyst roles"}), 400
+
+        if company_id:
+            company = Company.query.get(company_id)
+            if not company:
+                return jsonify({"msg": "Company not found"}), 404
+
+        new_user = User(
+            username=username,
+            password_hash=hash_pwd(password),
+            role=role,
+            company_id=company_id if role != ROLE_ADMIN else None,
+            email=email
+        )
+        db.session.add(new_user)
+        db.session.commit()
+
+        return jsonify({"msg": "User registered successfully", "user_id": new_user.id}), 201
 
 
-@app.post("/api/login")
-def login():
-    payload = request.json or {}
-    user = User.query.filter_by(username=payload.get("username")).first()
-    if not user or not verify_pwd(
-        user.password_hash, payload.get("password", "")
-    ):
-        return {"error": "invalid credentials"}, 401
-    session[SESSION_USER_ID] = user.id
-    return {"message": "logged in"}
+    @app.route('/api/login', methods=['POST'])
+    def login():
+        username = request.json.get('username', None)
+        password = request.json.get('password', None)
+
+        user = User.query.filter_by(username=username).first()
+
+        if user and check_password_hash(user.password_hash, password):
+            access_token = create_access_token(identity=str(user.id))
+            logger.info(f"User {username} logged in successfully.")
+            return jsonify(access_token=access_token, username=user.username, role=user.role), 200
+        else:
+            logger.warning(f"Failed login attempt for username: {username}")
+            return jsonify({"msg": "Bad username or password"}), 401
+
+    @app.route('/api/logout', methods=['POST'])
+    @jwt_required()
+    def logout():
+        unset_jwt_cookies(jsonify({"msg": "Successfully logged out"}))
+        return jsonify({"msg": "Successfully logged out"}), 200
+
+    @app.route('/api/current_user', methods=['GET'])
+    @jwt_required()
+    def get_current_user_info():
+        user_id = int(get_jwt_identity())
+        user = User.query.get(user_id)
+        if user:
+            return jsonify({
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "company_id": user.company_id,
+                "email": user.email
+            }), 200
+        return jsonify({"msg": "User not found"}), 404
 
 
-@app.post("/api/logout")
-@login_required()
-def logout():
-    session.pop(SESSION_USER_ID, None)
-    user_id = g.current_user.id
-    if user_id in memory_store:
-        del memory_store[user_id]
-    return {"message": "logged out"}
+    @app.route('/api/users', methods=['GET'])
+    @require_role([ROLE_ADMIN])
+    def get_all_users():
+        users = User.query.all()
+        users_data = [{
+            "id": u.id,
+            "username": u.username,
+            "role": u.role,
+            "company_id": u.company_id,
+            "email": u.email
+        } for u in users]
+        return jsonify(users_data), 200
 
+    @app.route('/api/users/<int:user_id>', methods=['GET'])
+    @require_role([ROLE_ADMIN])
+    def get_user_by_id(user_id):
+        user = User.query.get(user_id)
+        if user:
+            return jsonify({
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "company_id": user.company_id,
+                "email": user.email
+            }), 200
+        return jsonify({"msg": "User not found"}), 404
 
-# -------------------------------------------------------------------- #
-#  Company access endpoint                                             #
-# -------------------------------------------------------------------- #
-@app.get("/api/companies")
-@login_required()
-def get_companies():
-    user = g.current_user
-    companies = Company.query.all()
-    return jsonify(
-        [
-            {
+    @app.route('/api/users/<int:user_id>', methods=['PUT'])
+    @require_role([ROLE_ADMIN])
+    def update_user(user_id):
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+
+        data = request.get_json()
+        user.username = data.get('username', user.username)
+        user.role = data.get('role', user.role)
+        user.email = data.get('email', user.email)
+
+        new_company_id = data.get('company_id')
+        if user.role != ROLE_ADMIN:
+            if new_company_id:
+                company = Company.query.get(new_company_id)
+                if not company:
+                    return jsonify({"msg": "Company not found"}), 404
+                user.company_id = new_company_id
+            else:
+                user.company_id = None
+        else:
+            user.company_id = None
+
+        db.session.commit()
+        return jsonify({"msg": "User updated successfully"}), 200
+
+    @app.route('/api/users/<int:user_id>', methods=['DELETE'])
+    @require_role([ROLE_ADMIN])
+    def delete_user(user_id):
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"msg": "User not found"}), 404
+        db.session.delete(user)
+        db.session.commit()
+        return jsonify({"msg": "User deleted successfully"}), 200
+
+    # --- Company Management Routes ---
+
+    @app.route('/api/companies', methods=['POST'])
+    @require_role([ROLE_ADMIN])
+    def add_company():
+        data = request.get_json()
+        name = data.get('name')
+        currency = data.get('currency', 'USD')
+        parent_company_id = data.get('parent_company_id')
+
+        if not name:
+            return jsonify({"msg": "Company name is required"}), 400
+
+        if Company.query.filter_by(name=name).first():
+            return jsonify({"msg": "Company with this name already exists"}), 409
+
+        if parent_company_id:
+            parent_company = Company.query.get(parent_company_id)
+            if not parent_company:
+                return jsonify({"msg": "Parent company not found"}), 404
+
+        new_company = Company(name=name, currency=currency, parent_company_id=parent_company_id)
+        db.session.add(new_company)
+        db.session.commit()
+        return jsonify({"msg": "Company added successfully", "company_id": new_company.id}), 201
+
+    @app.route('/api/companies', methods=['GET'])
+    @jwt_required()
+    def get_companies():
+        user_id = int(get_jwt_identity())
+        current_user = User.query.get(user_id)
+
+        if not current_user:
+            return jsonify({"msg": "User not found"}), 404
+
+        authorized_company_ids = get_authorized_company_ids(current_user)
+
+        if not authorized_company_ids:
+            return jsonify([]), 200
+
+        companies = Company.query.filter(Company.id.in_(authorized_company_ids)).all()
+        companies_data = [{
+            "id": c.id,
+            "name": c.name,
+            "currency": c.currency,
+            "parent_company_id": c.parent_company_id
+        } for c in companies]
+        return jsonify(companies_data), 200
+
+    @app.route('/api/companies/<int:company_id>', methods=['GET'])
+    @jwt_required()
+    def get_company_by_id(company_id):
+        user_id = int(get_jwt_identity())
+        current_user = User.query.get(user_id)
+
+        if not current_user:
+            return jsonify({"msg": "User not found"}), 404
+
+        authorized_company_ids = get_authorized_company_ids(current_user)
+        if company_id not in authorized_company_ids:
+            logger.warning(f"User {current_user.username} (ID: {user_id}) attempted to access unauthorized company ID: {company_id}")
+            return jsonify({"msg": "Forbidden: Not authorized to view this company"}), 403
+
+        company = Company.query.get(company_id)
+        if company:
+            return jsonify({
                 "id": company.id,
                 "name": company.name,
-                "created_at": (
-                    company.created_at.isoformat()
-                    if company.created_at
-                    else None
-                ),
+                "currency": company.currency,
+                "parent_company_id": company.parent_company_id
+            }), 200
+        return jsonify({"msg": "Company not found"}), 404
+
+    @app.route('/api/companies/<int:company_id>', methods=['PUT'])
+    @require_role([ROLE_ADMIN])
+    def update_company(company_id):
+        company = Company.query.get(company_id)
+        if not company:
+            return jsonify({"msg": "Company not found"}), 404
+
+        data = request.get_json()
+        company.name = data.get('name', company.name)
+        company.currency = data.get('currency', company.currency)
+        company.parent_company_id = data.get('parent_company_id', company.parent_company_id)
+
+        if company.parent_company_id is not None:
+            parent_company = Company.query.get(company.parent_company_id)
+            if not parent_company:
+                return jsonify({"msg": "Parent company not found"}), 404
+            if company.id == company.parent_company_id:
+                return jsonify({"msg": "Company cannot be its own parent"}), 400
+
+        db.session.commit()
+        return jsonify({"msg": "Company updated successfully"}), 200
+
+    @app.route('/api/companies/<int:company_id>', methods=['DELETE'])
+    @require_role([ROLE_ADMIN])
+    def delete_company(company_id):
+        company = Company.query.get(company_id)
+        if not company:
+            return jsonify({"msg": "Company not found"}), 404
+
+        User.query.filter_by(company_id=company_id).update({"company_id": None})
+        BalanceSheet.query.filter_by(company_id=company_id).delete()
+
+        db.session.delete(company)
+        db.session.commit()
+        return jsonify({"msg": "Company deleted successfully"}), 200
+
+
+    # --- Balance Sheet Routes ---
+    @app.route('/api/balance_sheets', methods=['POST'])
+    @jwt_required()
+    def upload_balance_sheet():
+        user_id = int(get_jwt_identity())
+        current_user = User.query.get(user_id)
+
+        if not current_user:
+            return jsonify({"msg": "User not found"}), 404
+
+        if current_user.role not in [ROLE_ADMIN, ROLE_CEO]:
+            return jsonify({"msg": "Forbidden: Only Admins and CEOs can upload balance sheets"}), 403
+
+        if 'file' not in request.files:
+            return jsonify({"msg": "No file part in the request"}), 400
+
+        file = request.files['file']
+        company_id = request.form.get('company_id')
+        year = request.form.get('year')
+
+        if not company_id or not year:
+            return jsonify({"msg": "Missing company_id or year"}), 400
+
+        try:
+            company_id = int(company_id)
+            year = int(year)
+        except ValueError:
+            return jsonify({"msg": "Invalid company_id or year format"}), 400
+
+        if current_user.role == ROLE_CEO:
+            authorized_company_ids = get_authorized_company_ids(current_user)
+            if company_id not in authorized_company_ids:
+                logger.warning(f"CEO user {current_user.username} (ID: {user_id}) attempted to upload for unauthorized company ID: {company_id}")
+                return jsonify({"msg": "Forbidden: Not authorized to upload for this company"}), 403
+
+        if file.filename == '':
+            return jsonify({"msg": "No selected file"}), 400
+
+        if file and file.filename.endswith('.pdf'):
+            existing_bs = BalanceSheet.query.filter_by(company_id=company_id, year=year).first()
+            if existing_bs:
+                return jsonify({"msg": f"Balance sheet for Company ID {company_id} and Year {year} already exists. Please delete the existing one first if you wish to re-upload."}), 409
+
+            try:
+                temp_pdf_path = f"temp_balance_sheet_{company_id}_{year}.pdf"
+                file.save(temp_pdf_path)
+
+                logger.info(f"Extracting financial data from {temp_pdf_path} for company_id: {company_id}, year: {year}")
+                extracted_data = extract_financial_data_from_pdf(temp_pdf_path)
+
+                if not extracted_data:
+                    os.remove(temp_pdf_path)
+                    return jsonify({"msg": "Failed to extract sufficient financial data from the PDF."}), 400
+
+                balance_sheet = BalanceSheet(
+                    company_id=company_id,
+                    year=year,
+                    revenue=extracted_data.get('revenue'),
+                    net_income=extracted_data.get('net_income'),
+                    assets=extracted_data.get('assets'),
+                    liabilities=extracted_data.get('liabilities'),
+                    pdf_text=extracted_data.get('full_text', '')
+                )
+                db.session.add(balance_sheet)
+                db.session.commit()
+                logger.info(f"Balance sheet data saved for Company ID: {company_id}, Year: {year}")
+
+                logger.info(f"Loading PDF text into vector store for company_id: {company_id}, year: {year}")
+                # Now 'models' is imported and available to pass
+                load_pdf_to_vectorstore(temp_pdf_path, company_id, year, db, models)
+
+                os.remove(temp_pdf_path)
+
+                return jsonify({"msg": "Balance sheet uploaded and processed successfully", "data": extracted_data}), 201
+
+            except Exception as e:
+                logger.error(f"Error processing balance sheet: {e}")
+                if os.path.exists(temp_pdf_path):
+                    os.remove(temp_pdf_path)
+                return jsonify({"msg": f"Error processing file: {str(e)}"}), 500
+        else:
+            return jsonify({"msg": "Only PDF files are allowed"}), 400
+
+    @app.route('/api/balance_sheets/<int:company_id>/<int:year>', methods=['DELETE'])
+    @jwt_required()
+    def delete_balance_sheet(company_id, year):
+        user_id = int(get_jwt_identity())
+        current_user = User.query.get(user_id)
+
+        if not current_user:
+            return jsonify({"msg": "User not found"}), 404
+
+        if current_user.role not in [ROLE_ADMIN, ROLE_CEO]:
+            return jsonify({"msg": "Forbidden: Only Admins and CEOs can delete balance sheets"}), 403
+
+        if current_user.role == ROLE_CEO:
+            authorized_company_ids = get_authorized_company_ids(current_user)
+            if company_id not in authorized_company_ids:
+                logger.warning(f"CEO user {current_user.username} (ID: {user_id}) attempted to delete balance sheet for unauthorized company ID: {company_id}")
+                return jsonify({"msg": "Forbidden: Not authorized to delete balance sheets for this company"}), 403
+
+        balance_sheet = BalanceSheet.query.filter_by(company_id=company_id, year=year).first()
+        if not balance_sheet:
+            return jsonify({"msg": "Balance sheet not found"}), 404
+
+        try:
+            delete_vectors_for_balance_sheet(company_id, year)
+            logger.info(f"Deleted vector embeddings for Company ID: {company_id}, Year: {year}")
+
+            db.session.delete(balance_sheet)
+            db.session.commit()
+            return jsonify({"msg": "Balance sheet deleted successfully"}), 200
+        except Exception as e:
+            logger.error(f"Error deleting balance sheet: {e}")
+            return jsonify({"msg": f"Error deleting balance sheet: {str(e)}"}), 500
+
+
+    @app.route('/api/company_metrics/<int:company_id>', methods=['GET'])
+    @jwt_required()
+    def get_company_metrics(company_id):
+        user_id = int(get_jwt_identity())
+        current_user = User.query.get(user_id)
+
+        if not current_user:
+            return jsonify({"msg": "User not found"}), 404
+
+        authorized_company_ids = get_authorized_company_ids(current_user)
+        if company_id not in authorized_company_ids:
+            logger.warning(f"User {current_user.username} (ID: {user_id}) attempted to access metrics for unauthorized company ID: {company_id}")
+            return jsonify({"msg": "Forbidden: Not authorized to view metrics for this company"}), 403
+
+        company = Company.query.get(company_id)
+        if not company:
+            return jsonify({"msg": "Company not found"}), 404
+
+        balance_sheets = BalanceSheet.query.filter_by(company_id=company_id).order_by(BalanceSheet.year).all()
+
+        if not balance_sheets:
+            return jsonify({"msg": "No financial metrics found for this company"}), 404
+
+        years = []
+        revenue = []
+        net_income = []
+        assets = []
+        liabilities = []
+
+        for bs in balance_sheets:
+            years.append(bs.year)
+            revenue.append(bs.revenue)
+            net_income.append(bs.net_income)
+            assets.append(bs.assets)
+            liabilities.append(bs.liabilities)
+
+        return jsonify({
+            "company_name": company.name,
+            "currency": company.currency,
+            "years": years,
+            "revenue": revenue,
+            "netIncome": net_income,
+            "assets": assets,
+            "liabilities": liabilities
+        }), 200
+
+
+    # --- Chat Interface Route ---
+    @app.route('/api/chat', methods=['POST'])
+    @jwt_required()
+    def chat_with_ai():
+        user_id = int(get_jwt_identity())
+        current_user = User.query.get(user_id)
+
+        if not current_user:
+            return jsonify({"msg": "User not found"}), 404
+
+        data = request.get_json()
+        user_query = data.get('query')
+        company_id = data.get('company_id')
+
+        if not user_query:
+            return jsonify({"error": "No query provided"}), 400
+
+        if not company_id:
+            return jsonify({"error": "No company selected for the query"}), 400
+
+        try:
+            company_id = int(company_id)
+        except ValueError:
+            return jsonify({"msg": "Invalid company_id format"}), 400
+
+        authorized_company_ids = get_authorized_company_ids(current_user)
+        if company_id not in authorized_company_ids:
+            logger.warning(f"User {current_user.username} (ID: {user_id}) attempted to chat about unauthorized company ID: {company_id}")
+            return jsonify({"msg": "Forbidden: Not authorized to query this company"}), 403
+
+        company = Company.query.get(company_id)
+        if not company:
+            return jsonify({"msg": "Company not found"}), 404
+
+        try:
+            # llm and embeddings are already initialized in create_app
+            response_text = generate_chat_response(user_query, company_id, llm, embeddings, db, models)
+            return jsonify({"response": response_text})
+        except Exception as e:
+            logger.error(f"Error in chat endpoint: {e}")
+            return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+    # --- Health endpoint ---
+    @app.get("/api/health")
+    def health():
+        ai_status = "available" if (llm and embeddings) else "unavailable"
+        chroma_status = (
+            "available" if os.path.exists("./chroma_db") else "not_initialized"
+        )
+        # Check if DB has at least one user to confirm connection/tables
+        db_connected = False
+        try:
+            with app.app_context(): # Ensure we are in app context for DB query
+                db_connected = db.session.query(User).first() is not None
+        except Exception as e:
+            logger.error(f"Database health check failed: {e}")
+            db_connected = False
+
+        return jsonify(
+            {
+                "status": "healthy",
+                "ai_components": ai_status,
+                "chromadb": chroma_status,
+                "database": "connected" if db_connected else "not_connected",
             }
-            for company in companies
-        ]
-    )
-
-
-# -------------------------------------------------------------------- #
-#  RAG Chat endpoint                                                   #
-# -------------------------------------------------------------------- #
-@app.post("/api/chat")
-@login_required()
-def chat():
-    global llm, embeddings, memory_store
-
-    if not llm or not embeddings:
-        return {
-            "error": "AI services unavailable. Please check GEMINI_API_KEY."
-        }, 503
-
-    payload = request.json or {}
-    query = payload.get("query", "").strip()
-    company_id = payload.get("company_id")
-
-    if not query:
-        return {"error": "query is required"}, 400
-    if not company_id:
-        return {"error": "company_id is required"}, 400
-
-    user = g.current_user
-    company = Company.query.get(company_id)
-    if not company:
-        return {"error": "Company not found"}, 404
-
-    try:
-        chroma_db_dir = "./chroma_db"
-        if not os.path.exists(chroma_db_dir):
-            return {
-                "error": "ChromaDB not initialized. Please run data_ingestion_script.py first."
-            }, 503
-
-        persistent_client = chromadb.PersistentClient(path=chroma_db_dir)
-        vectorstore = Chroma(
-            client=persistent_client,
-            collection_name="balance_sheet_data",
-            embedding_function=embeddings,
         )
 
-        retriever = vectorstore.as_retriever(
-            search_kwargs={"k": 5, "filter": {"company_id": company_id}}
-        )
+    return app
 
-        user_id = user.id
-        if user_id not in memory_store:
-            memory_store[user_id] = ConversationBufferMemory(
-                memory_key="chat_history",
-                return_messages=True,
-                output_key="answer",
-            )
-        memory = memory_store[user_id]
-
-        system_prompt = (
-            "You are a financial analyst AI assistant specializing in balance sheet analysis. "
-            f"You have access to balance sheet data for {company.name}. "
-            "Use the provided context to answer questions about financial metrics, trends, and insights. "
-            "Be precise, analytical, and provide specific numbers from the data when available. "
-            "If you cannot find relevant information in the context, clearly state that. "
-            "Keep your responses concise but informative.\n\n"
-            "Context:\n{context}"
-        )
-
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", system_prompt),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ]
-        )
-
-        document_chain = create_stuff_documents_chain(llm, prompt)
-        retrieval_chain = create_retrieval_chain(retriever, document_chain)
-        chat_history = memory.chat_memory.messages
-
-        response = retrieval_chain.invoke(
-            {"input": query, "chat_history": chat_history}
-        )
-
-        memory.save_context({"input": query}, {"answer": response["answer"]})
-
-        result = {
-            "answer": response["answer"],
-            "company": company.name,
-            "sources_count": len(response.get("context", [])),
-            "conversation_length": len(memory.chat_memory.messages),
-        }
-
-        if payload.get("include_sources", False):
-            result["sources"] = [
-                {"content": doc.page_content, "metadata": doc.metadata}
-                for doc in response.get("context", [])
-            ]
-
-        return jsonify(result)
-
-    except Exception as e:
-        print(f"Error in chat endpoint: {e}")
-        return {"error": f"Internal server error: {str(e)}"}, 500
-
-
-@app.get("/api/company_metrics/<int:company_id>")
-@login_required()
-def company_metrics(company_id):
-    user = g.current_user
-    company = Company.query.get(company_id)
-    if not company:
-        return {"error": "Company not found"}, 404
-        
-    # Fetch metrics
-    entries = (
-        BalanceSheetEntry.query.filter_by(company_id=company_id)
-        .order_by(BalanceSheetEntry.year)
-        .all()
-    )
-    years = sorted({e.year for e in entries})
-    revenue = []
-    assets = []
-    liabilities = []
-    for y in years:
-        year_entries = [e for e in entries if e.year == y]
-
-        # Find metrics by name (case-insensitive)
-        def get_metric(name):
-            for e in year_entries:
-                if e.metric.lower() == name.lower():
-                    return float(e.value)
-            return None
-
-        revenue.append(get_metric("Revenue"))
-        assets.append(get_metric("Total Assets"))
-        liabilities.append(get_metric("Total Liabilities"))
-    return {
-        "years": years,
-        "revenue": revenue,
-        "assets": assets,
-        "liabilities": liabilities,
-        "currency": "USD",
-    }
-
-
-# -------------------------------------------------------------------- #
-#  Simple test route                                                   #
-# -------------------------------------------------------------------- #
-@app.get("/api/me")
-@login_required()
-def me():
-    user = g.current_user
-    return {"id": user.id, "username": user.username, "role": user.role}
-
-
-@app.get("/api/health")
-def health():
-    ai_status = "available" if (llm and embeddings) else "unavailable"
-    chroma_status = (
-        "available" if os.path.exists("./chroma_db") else "not_initialized"
-    )
-
-    return jsonify(
-        {
-            "status": "healthy",
-            "ai_components": ai_status,
-            "chromadb": chroma_status,
-            "database": "connected",
-        }
-    )
-
-
-if __name__ == "__main__":
+# This part is for running the development server directly.
+# For CLI commands, Flask typically looks for a 'create_app' function
+# or an 'app' instance at the top level of the FLASK_APP module.
+# By defining 'app' here, it helps Flask discover the app for 'flask run'.
+# For CLI commands, 'create_app' is the preferred way.
+if __name__ == '__main__':
+    app = create_app() # Create the app instance using the factory
     app.run(debug=True)

@@ -15,12 +15,14 @@ from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
-print(os.getenv("GEMINI_API_KEY"))
 
 # Add the backend directory to Python path to import our modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from app import app, db, Company, BalanceSheetEntry
+# Import create_app from app.py to get the app instance
+from app import create_app
+# Import db, Company, and BalanceSheet (corrected model name) from models
+from models import db, Company, BalanceSheet # Corrected: BalanceSheet instead of BalanceSheetEntry
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_chroma import Chroma
 import chromadb
@@ -28,25 +30,48 @@ from chromadb.config import Settings
 from langchain_core.documents import Document
 
 
-def create_text_chunk(entry, company_name):
+def create_text_chunk(entry, company_name, currency):
     """
     Create a descriptive text chunk for a balance sheet entry.
     Format: "For [Company] in [Year], [Metric] was [Value] [Currency]."
     """
-    return (
-        f"For {company_name} in {entry.year}, "
-        f"{entry.metric} was {entry.value} {entry.currency}."
-    )
+    # Assuming 'entry' now directly represents a BalanceSheet object with attributes
+    # like revenue, net_income, assets, liabilities.
+    # We'll create chunks for each available metric.
+    chunks = []
+    if entry.revenue is not None:
+        chunks.append(f"For {company_name} in {entry.year}, Revenue was {entry.revenue} {currency}.")
+    if entry.net_income is not None:
+        chunks.append(f"For {company_name} in {entry.year}, Net Income was {entry.net_income} {currency}.")
+    if entry.assets is not None:
+        chunks.append(f"For {company_name} in {entry.year}, Total Assets were {entry.assets} {currency}.")
+    if entry.liabilities is not None:
+        chunks.append(f"For {company_name} in {entry.year}, Total Liabilities were {entry.liabilities} {currency}.")
+
+    # If the PDF text was stored, include it as a general context chunk
+    if entry.pdf_text:
+        chunks.append(f"Full balance sheet text for {company_name} in {entry.year}: {entry.pdf_text}")
+
+    return "\n".join(chunks) # Join all relevant chunks
 
 
-def get_unique_document_id(entry):
-    """Generate a unique document ID for deduplication."""
-    return f"company_{entry.company_id}_year_{entry.year}_metric_{entry.metric.replace(' ', '_')}"
+def get_unique_document_id(company_id, year, metric_name=None):
+    """
+    Generate a unique document ID for deduplication.
+    Now includes metric_name to allow separate chunks for different metrics from the same year.
+    If metric_name is None, it's for the full PDF text.
+    """
+    if metric_name:
+        return f"company_{company_id}_year_{year}_metric_{metric_name.replace(' ', '_').lower()}"
+    return f"company_{company_id}_year_{year}_full_text"
 
 
 def main():
     """Main ingestion function."""
     print("🚀 Starting ChromaDB data ingestion...")
+
+    # Create the Flask app instance
+    app = create_app()
 
     # Verify API key
     gemini_api_key = os.getenv("GEMINI_API_KEY")
@@ -75,7 +100,7 @@ def main():
         # Initialize Chroma vector store
         vectorstore = Chroma(
             client=persistent_client,
-            collection_name="balance_sheet_data",
+            collection_name="balance_sheet_data", # Ensure this matches the collection name in ai_model.py
             embedding_function=embeddings,
         )
     except Exception as e:
@@ -86,81 +111,113 @@ def main():
     with app.app_context():
         print("🔍 Fetching balance sheet data from SQLite...")
 
-        # Get all balance sheet entries with company information
-        entries = (
-            db.session.query(BalanceSheetEntry, Company)
-            .join(Company, BalanceSheetEntry.company_id == Company.id)
+        # Get all BalanceSheet entries with company information
+        # Corrected: Query BalanceSheet model directly
+        entries_with_companies = (
+            db.session.query(BalanceSheet, Company)
+            .join(Company, BalanceSheet.company_id == Company.id)
             .all()
         )
 
-        if not entries:
+        if not entries_with_companies:
             print("⚠️  No balance sheet entries found in database")
             return
 
-        print(f"📊 Found {len(entries)} balance sheet entries")
+        print(f"📊 Found {len(entries_with_companies)} balance sheet records")
 
         # Check existing documents to avoid duplicates
         try:
-            existing_docs = vectorstore.get()
+            existing_docs = vectorstore.get(limit=10000) # Fetch more to be safe
             existing_ids = set(existing_docs.get("ids", []))
             print(
                 f"📋 Found {len(existing_ids)} existing documents in ChromaDB"
             )
-        except Exception:
+        except Exception as e:
             existing_ids = set()
-            print("📋 ChromaDB collection is empty")
+            print(f"📋 ChromaDB collection is empty or error fetching: {e}")
 
         # Prepare data for batch insertion
-        documents = []
-        metadatas = []
-        ids = []
+        documents_to_add = []
+        metadatas_to_add = []
+        ids_to_add = []
 
         processed_count = 0
         skipped_count = 0
 
-        for entry, company in entries:
-            doc_id = get_unique_document_id(entry)
-
-            # Skip if already exists
-            if doc_id in existing_ids:
-                skipped_count += 1
-                continue
-
-            # Create text chunk
-            text_chunk = create_text_chunk(entry, company.name)
-
-            # Create metadata for RBAC filtering and context
-            metadata = {
-                "company_id": entry.company_id,
-                "company_name": company.name,
-                "year": entry.year,
-                "metric": entry.metric,
-                "value": float(entry.value),
-                "currency": entry.currency,
-                "entry_id": entry.id,
+        for balance_sheet_record, company in entries_with_companies:
+            # Create chunks for each metric and the full text
+            metrics_to_chunk = {
+                "Revenue": balance_sheet_record.revenue,
+                "Net Income": balance_sheet_record.net_income,
+                "Total Assets": balance_sheet_record.assets,
+                "Total Liabilities": balance_sheet_record.liabilities,
             }
 
-            documents.append(
-                Document(page_content=text_chunk, metadata=metadata)
-            )
-            ids.append(doc_id)
-            processed_count += 1
+            # Chunks for individual metrics
+            for metric_name, value in metrics_to_chunk.items():
+                if value is not None:
+                    text_chunk = f"For {company.name} in {balance_sheet_record.year}, {metric_name} was {value} {company.currency}."
+                    doc_id = get_unique_document_id(balance_sheet_record.company_id, balance_sheet_record.year, metric_name)
 
-        if not documents:
+                    if doc_id in existing_ids:
+                        skipped_count += 1
+                        continue
+
+                    metadata = {
+                        "company_id": balance_sheet_record.company_id,
+                        "company_name": company.name,
+                        "year": balance_sheet_record.year,
+                        "metric": metric_name,
+                        "value": float(value),
+                        "currency": company.currency,
+                        "source": f"BalanceSheet_{company.id}_{balance_sheet_record.year}.pdf" # Consistent source name
+                    }
+                    documents_to_add.append(text_chunk)
+                    metadatas_to_add.append(metadata)
+                    ids_to_add.append(doc_id)
+                    processed_count += 1
+
+            # Chunk for full PDF text (if available)
+            if balance_sheet_record.pdf_text:
+                full_text_doc_id = get_unique_document_id(balance_sheet_record.company_id, balance_sheet_record.year, "full_text")
+                if full_text_doc_id not in existing_ids:
+                    documents_to_add.append(balance_sheet_record.pdf_text)
+                    metadatas_to_add.append({
+                        "company_id": balance_sheet_record.company_id,
+                        "company_name": company.name,
+                        "year": balance_sheet_record.year,
+                        "metric": "Full Document",
+                        "source": f"BalanceSheet_{company.id}_{balance_sheet_record.year}.pdf"
+                    })
+                    ids_to_add.append(full_text_doc_id)
+                    processed_count += 1
+                else:
+                    skipped_count += 1
+
+
+        if not documents_to_add:
             print(
                 "✅ All data already exists in ChromaDB. No new documents to add."
             )
             return
 
         # Batch insert documents
-        print(f"⏳ Adding {len(documents)} new documents to ChromaDB...")
+        print(f"⏳ Adding {len(documents_to_add)} new documents to ChromaDB...")
         try:
-            vectorstore.add_documents(documents=documents, ids=ids)
+            # Use add directly with lists of documents, metadatas, and ids
+            vectorstore.add_texts(
+                texts=documents_to_add,
+                metadatas=metadatas_to_add,
+                ids=ids_to_add
+            )
+            vectorstore.persist() # Ensure persistence after adding
 
             print(f"✅ Successfully processed {processed_count} new entries")
             print(f"⏩ Skipped {skipped_count} existing entries")
+            # Recalculate total documents after adding
+            final_total_docs = vectorstore.get(limit=10000).get("ids", [])
             print(
-                f"📚 Total documents in ChromaDB: {len(existing_ids) + processed_count}"
+                f"📚 Total documents in ChromaDB: {len(final_total_docs)}"
             )
 
         except Exception as e:
