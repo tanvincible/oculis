@@ -7,6 +7,7 @@ import FinancialCharts from '../components/FinancialCharts';
 import ChatInterface from '../components/ChatInterface';
 import UserManagement from '../components/UserManagement'; // Assuming you have this component
 import CompanyManagement from '../components/CompanyManagement'; // Assuming you have this component
+import BalanceSheetUploader from '../components/BalanceSheetUploader';
 
 // Define navigation items for different roles
 const navItems = {
@@ -64,11 +65,11 @@ export default function DashboardPage() {
         }
     }, [authLoading, fetchCompanies]);
 
-    const handleCompanyChange = (event) => {
-        const id = parseInt(event.target.value, 10);
-        const company = companies.find(c => c.id === id);
+    const handleCompanyChange = (e) => {
+        const id = e.target.value;
+        const company = companies.find(c => String(c.id) === id);
         setSelectedCompanyId(id);
-        setSelectedCompanyName(company ? company.name : '');
+        setSelectedCompanyName(company?.name || '');
     };
 
     const handleNavItemClick = (itemId) => {
@@ -101,17 +102,18 @@ export default function DashboardPage() {
     return (
         <div className="flex min-h-screen w-screen bg-gray-50 font-inter">
             {/* Sidebar */}
-            <aside className="w-64 bg-white shadow-lg p-6 flex flex-col rounded-r-xl">
-                <div className="text-2xl font-bold text-gray-800 mb-6">Oculis</div>
+            <aside className="sticky top-0 h-screen w-64 bg-neutral-900 shadow-2xl p-6 flex flex-col rounded-r-xl border-r border-neutral-800">
+                <div className="text-3xl font-extrabold text-white mb-8 tracking-tight">Oculis</div>
                 <nav className="flex-grow">
-                    <ul>
+                    <ul className="space-y-2">
                         {userNavItems.map(item => (
-                            <li key={item.id} className="mb-2">
+                            <li key={item.id}>
                                 <button
                                     onClick={() => handleNavItemClick(item.id)}
-                                    className={`w-full text-left px-4 py-2 rounded-lg transition-colors duration-200 ${activeNavItem === item.id
-                                        ? 'bg-blue-600 text-white shadow-md'
-                                        : 'text-gray-700 hover:bg-gray-100'
+                                    className={`w-full text-left px-5 py-3 rounded-xl font-medium text-lg transition-all duration-200
+                            ${activeNavItem === item.id
+                                            ? 'bg-blue-600 text-white shadow-lg ring-2 ring-blue-400'
+                                            : 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700 hover:text-white'
                                         }`}
                                 >
                                     {item.name}
@@ -120,11 +122,13 @@ export default function DashboardPage() {
                         ))}
                     </ul>
                 </nav>
-                <div className="mt-auto">
-                    <p className="text-sm text-gray-500 mb-2">Logged in as: <span className="font-semibold">{user.username} ({user.role})</span></p>
+                <div className="mt-auto pt-6 border-t border-neutral-800">
+                    <p className="text-sm text-neutral-400 mb-3">
+                        Logged in as: <span className="font-semibold text-white">{user.username} ({user.role})</span>
+                    </p>
                     <button
                         onClick={logout}
-                        className="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200 shadow-md"
+                        className="w-full bg-red-600 hover:bg-red-700 text-white font-semibold py-3 rounded-xl shadow-lg transition-all duration-200"
                     >
                         Logout
                     </button>
@@ -159,7 +163,7 @@ export default function DashboardPage() {
                                     id="company-select"
                                     value={selectedCompanyId || ''}
                                     onChange={handleCompanyChange}
-                                    className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm"
+                                    className="text-black bg-white mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md shadow-sm"
                                 >
                                     {companies.length === 0 ? (
                                         <option value="">No companies available</option>
@@ -167,7 +171,7 @@ export default function DashboardPage() {
                                         <>
                                             <option value="">-- Select a Company --</option>
                                             {companies.map(company => (
-                                                <option key={company.id} value={company.id}>
+                                                <option key={company.id} value={String(company.id)}>
                                                     {company.name}
                                                 </option>
                                             ))}
@@ -186,10 +190,9 @@ export default function DashboardPage() {
                         {selectedCompanyId && (
                             <>
                                 <div className="mb-8">
-                                    <FinancialCharts companyId={selectedCompanyId} companyName={selectedCompanyName} />
-                                </div>
-                                <div>
+                                    <BalanceSheetUploader companyId={selectedCompanyId} companyName={selectedCompanyName} />
                                     <ChatInterface companyId={selectedCompanyId} companyName={selectedCompanyName} />
+                                    <FinancialCharts companyId={selectedCompanyId} companyName={selectedCompanyName} />
                                 </div>
                             </>
                         )}

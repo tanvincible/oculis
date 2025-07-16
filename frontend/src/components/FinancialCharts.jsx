@@ -1,6 +1,5 @@
-// frontend/src/components/FinancialCharts.jsx
-
 import React, { useState, useEffect, useCallback } from 'react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from 'recharts';
 import { apiGetCompanyMetrics } from '../api/api';
 
 export default function FinancialCharts({ companyId, companyName }) {
@@ -23,7 +22,7 @@ export default function FinancialCharts({ companyId, companyName }) {
         } catch (err) {
             console.error("Failed to fetch company metrics:", err);
             setError(err.message || "Failed to load financial data for charts.");
-            setMetrics(null); // Clear previous data on error
+            setMetrics(null);
         } finally {
             setLoading(false);
         }
@@ -33,72 +32,49 @@ export default function FinancialCharts({ companyId, companyName }) {
         fetchCompanyMetrics();
     }, [fetchCompanyMetrics]);
 
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center h-64 bg-white rounded-xl shadow-lg p-6 font-inter text-gray-600">
-                <svg className="animate-spin h-8 w-8 mr-3 text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Loading financial charts for {companyName || 'selected company'}...
-            </div>
-        );
-    }
+    if (loading) return <div className="p-6 text-gray-800">Loading financial charts for {companyName}...</div>;
+    if (error) return <div className="p-6 text-red-600">Error loading charts: {error}</div>;
+    if (!metrics || metrics.years.length === 0) return <div className="p-6 text-gray-600">No financial data available for {companyName}</div>;
 
-    if (error) {
-        return (
-            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-xl shadow-lg relative font-inter">
-                <strong className="font-bold">Error loading charts:</strong>
-                <span className="block sm:inline ml-2">{error}</span>
-            </div>
-        );
-    }
+    const { years, revenue, netIncome, assets, liabilities, currency } = metrics;
+    const unit = currency === 'INR' ? '₹' : '$';
 
-    if (!metrics || metrics.years.length === 0) {
-        return (
-            <div className="bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-xl shadow-lg relative font-inter">
-                <strong className="font-bold">No financial data available</strong>
-                <span className="block sm:inline ml-2">for {companyName}. Please upload financial data (CSV/Excel) for this company.</span>
-            </div>
-        );
-    }
+    const chartData = years.map((year, idx) => ({
+        year,
+        Revenue: revenue[idx],
+        NetIncome: netIncome[idx],
+        Assets: assets[idx],
+        Liabilities: liabilities[idx],
+    })).reverse();
 
-    // Helper to render a simple line chart (text-based for now)
-    const renderSimpleChart = (title, data, unit) => {
-        if (!data || data.every(val => val === null)) {
-            return (
-                <div className="bg-gray-50 p-4 rounded-lg text-gray-600 text-center">
-                    No {title.toLowerCase()} data available.
-                </div>
-            );
-        }
-        return (
-            <div className="bg-white p-6 rounded-xl shadow-md border border-gray-100 mb-6">
-                <h3 className="text-xl font-semibold text-gray-700 mb-4">{title} ({metrics.currency})</h3>
-                <div className="flex flex-wrap justify-center gap-4">
-                    {metrics.years.map((year, index) => (
-                        <div key={year} className="flex flex-col items-center p-3 border border-gray-200 rounded-lg shadow-sm bg-blue-50">
-                            <span className="text-sm font-medium text-gray-500">{year}</span>
-                            <span className="text-lg font-bold text-blue-700">
-                                {data[index] !== null ? `${unit}${data[index].toLocaleString()}` : 'N/A'}
-                            </span>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        );
-    };
+    const renderLineChart = (title, dataKey, color) => (
+        <div className="mb-8 p-6 bg-white rounded-2xl shadow-xl border border-gray-300">
+            <h3 className="text-2xl font-bold text-gray-900 mb-5">{title} ({unit})</h3>
+            <ResponsiveContainer width="100%" height={320}>
+                <LineChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="year" stroke="#6b7280" />
+                    <YAxis stroke="#6b7280" />
+                    <Tooltip
+                        contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e5e7eb' }}
+                        formatter={(val) => `${unit}${val?.toLocaleString()}`}
+                    />
+                    <Legend />
+                    <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={3} dot={{ r: 4 }} />
+                </LineChart>
+            </ResponsiveContainer>
+        </div>
+    );
 
     return (
-        <div className="p-6 bg-white rounded-xl shadow-lg border border-gray-100">
-            <h2 className="text-2xl font-bold text-gray-800 mb-6 pb-2 border-b border-gray-200">
+        <div className="p-8 bg-gray-50 min-h-screen">
+            <h2 className="text-3xl font-extrabold text-gray-900 mb-8 tracking-tight">
                 Financial Charts for {companyName}
             </h2>
-
-            {renderSimpleChart("Revenue", metrics.revenue, metrics.currency === "INR" ? "₹" : "$")}
-            {renderSimpleChart("Net Income", metrics.netIncome, metrics.currency === "INR" ? "₹" : "$")}
-            {renderSimpleChart("Assets", metrics.assets, metrics.currency === "INR" ? "₹" : "$")}
-            {renderSimpleChart("Liabilities", metrics.liabilities, metrics.currency === "INR" ? "₹" : "$")}
+            {renderLineChart('Revenue', 'Revenue', '#3b82f6')}
+            {renderLineChart('Net Income', 'NetIncome', '#10b981')}
+            {renderLineChart('Assets', 'Assets', '#f59e0b')}
+            {renderLineChart('Liabilities', 'Liabilities', '#ef4444')}
         </div>
     );
 }

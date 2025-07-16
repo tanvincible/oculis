@@ -13,7 +13,6 @@ export default function ChatInterface({ companyId, companyName }) {
 
     // State for file upload
     const [file, setFile] = useState(null);
-    // Removed uploadYear state as it's no longer needed in frontend form
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState(null);
     const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -80,7 +79,6 @@ export default function ChatInterface({ companyId, companyName }) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('company_id', companyId);
-        // Removed appending 'year' as it's no longer needed from frontend
 
         try {
             const response = await apiUploadBalanceSheet(formData); // Capture response from API
@@ -155,64 +153,20 @@ export default function ChatInterface({ companyId, companyName }) {
 
     return (
         <div className="grid grid-rows-[auto_1fr_auto] h-full bg-white rounded-xl shadow-2xl p-6 border border-gray-100 font-sans">
-            <h2 className="text-3xl font-extrabold text-gray-900 mb-4 pb-3 border-b border-gray-200 flex justify-between items-center">
-                AI Financial Assistant: {companyName || 'Select Company'}
+            <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-200">
+                <h2 className="text-2xl font-extrabold text-gray-900 m-0">
+                    AI Financial Assistant: {companyName || 'Select Company'}
+                </h2>
                 {companyId && (
                     <button
                         onClick={handleClearChat}
-                        className="text-sm text-gray-500 hover:text-red-600 transition-colors duration-200 flex items-center px-3 py-1 rounded-full border border-gray-300 hover:border-red-400"
+                        className="text-sm font-medium text-gray-500 hover:text-red-600 transition-colors duration-200 flex items-center px-3 py-1 rounded-full border border-gray-300 hover:border-red-400"
                         title="Clear chat history for this company"
                     >
-                        <FaTrashAlt className="mr-1" /> Clear Chat
+                        <FaTrashAlt className="mr-1 text-base" /> Clear Chat
                     </button>
                 )}
-            </h2>
-
-            {/* File Upload Section */}
-            <div className="mb-6 p-5 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg shadow-inner border border-blue-100">
-                <h3 className="text-xl font-semibold text-blue-800 mb-3 flex items-center">
-                    <FaFileUpload className="mr-2 text-2xl" /> Upload Financial Data (CSV/Excel)
-                </h3>
-                <form onSubmit={handleFileUpload} className="flex flex-col md:flex-row items-stretch gap-4">
-                    <label className="block w-full md:w-auto flex-1">
-                        <span className="sr-only">Choose file</span>
-                        <input
-                            type="file"
-                            accept=".csv,.xlsx"
-                            onChange={(e) => setFile(e.target.files[0])}
-                            className="block w-full text-sm text-gray-700 file:mr-4 file:py-2 file:px-4
-                                       file:rounded-full file:border-0 file:text-sm file:font-semibold
-                                       file:bg-indigo-100 file:text-indigo-700 hover:file:bg-indigo-200
-                                       transition-colors duration-200 cursor-pointer"
-                            required
-                        />
-                        {file && <p className="text-sm text-gray-600 mt-1">Selected: {file.name}</p>}
-                    </label>
-
-                    {/* Removed Year input as it's now inferred from the file on backend */}
-
-                    <button
-                        type="submit"
-                        disabled={!file || uploading || !companyId} // Removed !uploadYear from disabled check
-                        className={`w-full md:w-auto px-6 py-2 rounded-lg font-bold text-white transition-colors duration-200 flex items-center justify-center
-                                    ${(!file || uploading || !companyId) ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 shadow-md'}`}
-                    >
-                        {uploading ? (
-                            <>
-                                <FaSpinner className="animate-spin mr-2" /> Uploading...
-                            </>
-                        ) : (
-                            <>
-                                <FaFileUpload className="mr-2" /> Upload Data
-                            </>
-                        )}
-                    </button>
-                </form>
-                {uploadError && <p className="text-red-600 text-sm mt-2 flex items-center"><FaTimesCircle className="mr-1" /> {uploadError}</p>}
-                {uploadSuccess && <p className="text-green-600 text-sm mt-2 flex items-center"><FaCheckCircle className="mr-1" /> Upload successful!</p>}
-                {!companyId && <p className="text-orange-600 text-sm mt-2 flex items-center"><FaInfoCircle className="mr-1" /> Please select a company first to enable file upload.</p>}
             </div>
-
 
             {/* Chat Messages Display */}
             <div className="flex-1 overflow-y-auto p-4 border border-gray-200 rounded-lg mb-4 bg-gray-50 shadow-inner custom-scrollbar">
@@ -247,9 +201,8 @@ export default function ChatInterface({ companyId, companyName }) {
                     type="text"
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder={companyId ? `Ask about ${companyName}'s financials...` : "Please select a company first..."}
-                    className="flex-1 px-5 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base shadow-sm transition-all duration-200"
-                    disabled={loading || !companyId}
+                    placeholder={companyId ? `Ask about ${companyName}'s financial details...` : "Please select a company first..."}
+                    className="flex-1 px-5 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base shadow-sm transition-all duration-200 text-gray-900"
                 />
                 <button
                     type="submit"
