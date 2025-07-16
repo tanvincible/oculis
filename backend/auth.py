@@ -22,7 +22,7 @@ def login_required(role: str | None = None):
             if not uid:
                 return jsonify({"error": "login required"}), 401
 
-            user = User.query.get(uid)
+            user = db.session.get(User, uid)
             if not user:
                 session.pop(SESSION_USER_ID, None)
                 return jsonify({"error": "invalid session"}), 401
@@ -44,3 +44,8 @@ def hash_pwd(pwd: str) -> str:
 
 def verify_pwd(hash_, pwd: str) -> bool:
     return check_password_hash(hash_, pwd)
+
+
+def error_response(message, status=400):
+    return jsonify({"error": message}), status
+    return error_response("login required", 401)

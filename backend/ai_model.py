@@ -2,25 +2,27 @@
 
 import os
 import logging
+import pandas as pd
+
+# Removed direct import of db, Company, BalanceSheet from models at top level
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-# from langchain.chains import RetrievalQA # No longer directly used
+from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
-from pypdf import PdfReader
-import re
 
-# Imports for conversational memory and advanced RAG chain
 from langchain.memory import ConversationBufferMemory
-# Corrected imports for create_stuff_documents_chain and create_retrieval_chain
 from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from dotenv import load_dotenv
+import models
 
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
 # Define the path for ChromaDB persistent storage
@@ -30,7 +32,8 @@ CHROMA_DB_PATH = "./chroma_db"
 _llm = None
 _embeddings = None
 _vectorstore = None
-_memory_store = {} # Global dictionary to store chat history per user ID
+_memory_store = {}
+
 
 def initialize_ai_components():
     """
@@ -39,178 +42,339 @@ def initialize_ai_components():
     """
     global _llm, _embeddings, _vectorstore
 
-    gemini_api_key = "AIzaSyDFvKaA5hYFIJMhZiep2l0ot9o_dT5twXo"
+    load_dotenv(
+        dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env")
+    )
+
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
-        logger.error("GEMINI_API_KEY environment variable not set. AI components cannot be initialized.")
-        raise ValueError("GEMINI_API_KEY is not set. Please configure your environment variables.")
+        logger.error(
+            "GEMINI_API_KEY environment variable not set. AI components cannot be initialized."
+        )
+        raise ValueError(
+            "GEMINI_API_KEY is not set. Please configure your environment variables."
+        )
 
     if _llm is None:
         try:
-            _llm = ChatGoogleGenerativeAI(model="gemini-1.5-pro", google_api_key=gemini_api_key, temperature=0.2)
-            logger.info("Google Gemini LLM (gemini-1.5-pro) initialized successfully.")
+            _llm = ChatGoogleGenerativeAI(
+                model="gemini-1.5-pro",
+                google_api_key=gemini_api_key,
+                temperature=0.2,
+            )
+            logger.info(
+                "Google Gemini LLM (gemini-1.5-pro) initialized successfully."
+            )
         except Exception as e:
             logger.error(f"Failed to initialize Google Gemini LLM: {e}")
             _llm = None
-            raise # Re-raise to prevent app from starting with broken AI
+            raise
 
     if _embeddings is None:
         try:
-            _embeddings = GoogleGenerativeAIEmbeddings(model="embedding-001", google_api_key=gemini_api_key)
-            logger.info("Google Gemini Embeddings (embedding-001) initialized successfully.")
+            _embeddings = GoogleGenerativeAIEmbeddings(
+                model="embedding-001", google_api_key=gemini_api_key
+            )
+            logger.info(
+                "Google Gemini Embeddings (embedding-001) initialized successfully."
+            )
         except Exception as e:
             logger.error(f"Failed to initialize Google Gemini Embeddings: {e}")
             _embeddings = None
-            raise # Re-raise to prevent app from starting with broken AI
+            raise
 
     if _llm and _embeddings and _vectorstore is None:
         try:
             os.makedirs(CHROMA_DB_PATH, exist_ok=True)
-            _vectorstore = Chroma(persist_directory=CHROMA_DB_PATH, embedding_function=_embeddings)
-            logger.info(f"ChromaDB vectorstore initialized/loaded from {CHROMA_DB_PATH}.")
+            _vectorstore = Chroma(
+                persist_directory=CHROMA_DB_PATH,
+                embedding_function=_embeddings,
+            )
+            logger.info(
+                f"ChromaDB vectorstore initialized/loaded from {CHROMA_DB_PATH}."
+            )
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB vectorstore: {e}")
             _vectorstore = None
-            raise # Re-raise to prevent app from starting with broken AI
+            raise
 
-    return _llm, _embeddings
+    return _llm, _embeddings, _vectorstore
 
-def load_pdf_to_vectorstore(pdf_path, company_id, year, db_session, models):
+
+# backend/ai_model.py
+
+# ... (existing imports and initialization) ...
+
+
+def process_structured_financial_data(
+    filepath, company_id, embeddings, db_session
+):
     """
-    Loads text from a PDF, chunks it, and adds it to the ChromaDB vector store.
-    Metadata includes company_id and year for filtering.
-    """
-    global _vectorstore, _embeddings
-
-    if _embeddings is None:
-        logger.error("Embeddings not initialized. Cannot load PDF to vector store.")
-        return
-
-    if _vectorstore is None:
-        try:
-            _vectorstore = Chroma(persist_directory=CHROMA_DB_PATH, embedding_function=_embeddings)
-            logger.info(f"Re-initialized ChromaDB vectorstore from {CHROMA_DB_PATH}.")
-        except Exception as e:
-            logger.error(f"Failed to re-initialize ChromaDB vectorstore: {e}")
-            return
-
-    try:
-        reader = PdfReader(pdf_path)
-        full_text = ""
-        for page in reader.pages:
-            full_text += page.extract_text() + "\n"
-
-        if not full_text.strip():
-            logger.warning(f"No text extracted from PDF: {pdf_path}")
-            return
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-            is_separator_regex=False,
-        )
-        texts = text_splitter.create_documents([full_text])
-
-        for doc in texts:
-            doc.metadata = {
-                "company_id": company_id,
-                "year": year,
-                "source": f"BalanceSheet_{company_id}_{year}.pdf"
-            }
-
-        _vectorstore.add_documents(texts)
-        _vectorstore.persist()
-        logger.info(f"Successfully loaded {len(texts)} chunks from {pdf_path} into vector store.")
-
-    except Exception as e:
-        logger.error(f"Error loading PDF {pdf_path} to vector store: {e}")
-
-
-def delete_vectors_for_balance_sheet(company_id, year):
-    """
-    Deletes all vectors associated with a specific company_id and year from ChromaDB.
+    Loads financial data from a structured CSV/Excel file, extracts key metrics for ALL years found,
+    stores them in the database, and generates text chunks for ChromaDB.
     """
     global _vectorstore
 
+    if embeddings is None:
+        logger.error(
+            "Embeddings not initialized. Cannot process structured data."
+        )
+        return None
+
     if _vectorstore is None:
-        logger.warning("ChromaDB vectorstore not initialized. Cannot delete vectors.")
+        try:
+            _vectorstore = Chroma(
+                persist_directory=CHROMA_DB_PATH, embedding_function=embeddings
+            )
+            logger.info(
+                f"Re-initialized ChromaDB vectorstore from {CHROMA_DB_PATH}."
+            )
+        except Exception as e:
+            logger.error(f"Failed to re-initialize ChromaDB vectorstore: {e}")
+            return None
+
+    try:
+        file_extension = os.path.splitext(filepath)[1].lower()
+        if file_extension == ".csv":
+            df = pd.read_csv(filepath)
+        elif file_extension == ".xlsx":
+            df = pd.read_excel(filepath)
+        else:
+            logger.error(f"Unsupported file type: {file_extension}")
+            return None
+
+        df.set_index("Metric", inplace=True)
+
+        # Identify year columns dynamically
+        # Filter out non-numeric/non-year columns (like 'Metric' if it somehow became a column)
+        year_columns = [
+            col
+            for col in df.columns
+            if str(col).isdigit() and len(str(col)) == 4
+        ]
+        if not year_columns:
+            logger.warning(f"No valid year columns found in file {filepath}.")
+            return {
+                "status": "no_years_found",
+                "message": "No valid year columns (e.g., 2022) found in the uploaded file.",
+            }
+
+        # IMPORT DATABASE MODELS LOCALLY TO AVOID CIRCULAR DEPENDENCY
+        from models import BalanceSheet, Company
+
+        company_obj = (
+            db_session.query(Company).filter_by(id=company_id).first()
+        )
+        company_name = (
+            company_obj.name if company_obj else f"Company {company_id}"
+        )
+
+        all_processed_data = {}
+        documents_for_chroma = []
+
+        for year_col in year_columns:
+            year = int(year_col)  # Ensure year is an integer
+
+            # First, delete existing vectors for this company and year to prevent duplicates/stale data
+            # You need to ensure delete_vectors_for_balance_sheet accepts int for company_id and year
+            delete_vectors_for_balance_sheet(company_id, year)
+
+            # Then, delete existing SQL DB entry for this company and year
+            existing_bs_entry = (
+                db_session.query(BalanceSheet)
+                .filter_by(company_id=company_id, year=year)
+                .first()
+            )
+            if existing_bs_entry:
+                db_session.delete(existing_bs_entry)
+                db_session.commit()
+                logger.info(
+                    f"Deleted existing balance sheet entry for Company ID: {company_id}, Year: {year}"
+                )
+
+            # Data Extraction for the current year_col
+            extracted_revenue = (
+                df.loc["Revenue", year_col]
+                if year_col in df.columns and "Revenue" in df.index
+                else None
+            )
+            extracted_net_income = (
+                df.loc["Net Income", year_col]
+                if year_col in df.columns and "Net Income" in df.index
+                else None
+            )
+            extracted_assets = (
+                df.loc["Total Assets", year_col]
+                if year_col in df.columns and "Total Assets" in df.index
+                else None
+            )
+            extracted_liabilities = (
+                df.loc["Total Liabilities", year_col]
+                if year_col in df.columns and "Total Liabilities" in df.index
+                else None
+            )
+
+            # Convert to float, handle non-numeric data
+            # (Your existing robust conversion logic is good here)
+            try:
+                extracted_revenue = (
+                    float(extracted_revenue)
+                    if extracted_revenue is not None
+                    else None
+                )
+            except ValueError:
+                extracted_revenue = None
+            try:
+                extracted_net_income = (
+                    float(extracted_net_income)
+                    if extracted_net_income is not None
+                    else None
+                )
+            except ValueError:
+                extracted_net_income = None
+            try:
+                extracted_assets = (
+                    float(extracted_assets)
+                    if extracted_assets is not None
+                    else None
+                )
+            except ValueError:
+                extracted_assets = None
+            try:
+                extracted_liabilities = (
+                    float(extracted_liabilities)
+                    if extracted_liabilities is not None
+                    else None
+                )
+            except ValueError:
+                extracted_liabilities = None
+
+            # Store in SQL Database (BalanceSheet model)
+            new_bs_entry = BalanceSheet(
+                company_id=company_id,
+                year=year,
+                revenue=extracted_revenue,
+                net_income=extracted_net_income,
+                assets=extracted_assets,
+                liabilities=extracted_liabilities,
+            )
+            db_session.add(new_bs_entry)
+            db_session.commit()  # Commit after each year's entry
+            logger.info(
+                f"Stored structured data for company {company_id}, year {year} in SQL DB."
+            )
+
+            # Prepare for ChromaDB (RAG)
+            financial_metrics = {
+                "Revenue": extracted_revenue,
+                "Net Income": extracted_net_income,
+                "Total Assets": extracted_assets,
+                "Total Liabilities": extracted_liabilities,
+            }
+
+            for metric_name, metric_value in financial_metrics.items():
+                if metric_value is not None:
+                    text_content = f"For {company_name}, the {metric_name.lower()} in {year} was {metric_value}."
+                    documents_for_chroma.append(
+                        Document(
+                            page_content=text_content,
+                            metadata={
+                                "company_id": company_id,
+                                "year": year,
+                                "metric": metric_name,
+                                "value": metric_value,
+                                "source": (
+                                    f"FinancialData_{company_id}_{year}.csv"
+                                    if file_extension == ".csv"
+                                    else f"FinancialData_{company_id}_{year}.xlsx"
+                                ),
+                            },
+                        )
+                    )
+
+            all_processed_data[year] = {
+                "revenue": extracted_revenue,
+                "net_income": extracted_net_income,
+                "assets": extracted_assets,
+                "liabilities": extracted_liabilities,
+            }
+
+        if documents_for_chroma:
+            _vectorstore.add_documents(documents_for_chroma)
+            # The deprecation warning for .persist() means this line can be removed if using ChromaDB 0.4.x+
+            # If you are on an older version or want to be explicit, keep it.
+            # _vectorstore.persist()
+            logger.info(
+                f"Successfully loaded {len(documents_for_chroma)} structured data chunks into vector store for company {company_id} across multiple years."
+            )
+        else:
+            logger.warning(
+                f"No valid data points found in file {filepath} for company {company_id} to add to vector store. This might be due to missing expected metrics or year columns."
+            )
+
+        return {"status": "success", "processed_years": all_processed_data}
+
+    except Exception as e:
+        logger.error(
+            f"Error processing structured file {filepath} for company {company_id}: {e}"
+        )
+        import traceback
+
+        logger.error(traceback.format_exc())
+        return {"status": "error", "message": str(e)}
+
+
+# Ensure delete_vectors_for_balance_sheet also handles company_id and year as integers
+# (Already discussed in previous response for the error fix)
+def delete_vectors_for_balance_sheet(company_id, year):
+    global _vectorstore
+    if _vectorstore is None:
+        logger.warning(
+            "ChromaDB vectorstore not initialized. Cannot delete vectors."
+        )
         return
 
     try:
         deleted_ids = _vectorstore.delete(
-            where={"company_id": company_id, "year": year}
+            where={
+                "$and": [
+                    {"company_id": {"$eq": company_id}},
+                    {"year": {"$eq": year}},
+                ]
+            }
         )
-        _vectorstore.persist()
-        logger.info(f"Deleted vectors for company_id={company_id}, year={year}. Deleted IDs: {deleted_ids}")
+        # _vectorstore.persist() # Remove if on ChromaDB 0.4.x+
+        logger.info(
+            f"Deleted vectors for company_id={company_id}, year={year}. Deleted IDs: {deleted_ids}"
+        )
     except Exception as e:
-        logger.error(f"Error deleting vectors for company_id={company_id}, year={year}: {e}")
+        logger.error(
+            f"Error deleting vectors for company_id={company_id}, year={year}: {e}"
+        )
 
 
-def extract_financial_data_from_pdf(pdf_path):
-    """
-    Extracts full text and attempts to parse key financial metrics from a PDF.
-    """
-    try:
-        reader = PdfReader(pdf_path)
-        full_text = ""
-        for page in reader.pages:
-            full_text += page.extract_text() + "\n"
-
-        if not full_text.strip():
-            logger.warning(f"No text extracted from PDF for financial data extraction: {pdf_path}")
-            return {"full_text": ""}
-
-        extracted_data = {
-            "full_text": full_text,
-            "revenue": None,
-            "net_income": None,
-            "assets": None,
-            "liabilities": None
-        }
-
-        def find_value_near_keyword(text, keywords, regex_pattern=r'(\d[\d,\.]*\d|\d+)', look_around=100):
-            text_lower = text.lower()
-            for keyword in keywords:
-                for match in re.finditer(re.escape(keyword.lower()), text_lower):
-                    start_idx = max(0, match.start() - look_around)
-                    end_idx = min(len(text), match.end() + look_around)
-                    context = text[start_idx:end_idx]
-                    numbers = re.findall(regex_pattern, context)
-                    if numbers:
-                        for num_str in numbers:
-                            cleaned_num_str = num_str.replace(',', '')
-                            try:
-                                return float(cleaned_num_str)
-                            except ValueError:
-                                continue
-            return None
-
-        extracted_data["revenue"] = find_value_near_keyword(full_text, ["revenue", "total revenue", "sales"])
-        extracted_data["net_income"] = find_value_near_keyword(full_text, ["net income", "profit after tax", "net profit"])
-        extracted_data["assets"] = find_value_near_keyword(full_text, ["total assets", "assets, total"])
-        extracted_data["liabilities"] = find_value_near_keyword(full_text, ["total liabilities", "liabilities, total"])
-
-        logger.info(f"Extracted financial data: {extracted_data}")
-        return extracted_data
-
-    except Exception as e:
-        logger.error(f"Error extracting financial data from PDF {pdf_path}: {e}")
-        return {"full_text": ""}
-
-
-def generate_chat_response(user_query, company_id, llm_instance, embeddings_instance, db_session, models):
+def generate_chat_response(
+    user_query,
+    company_id,
+    llm_instance,
+    embeddings_instance,
+    db_session,
+    models,
+):
     """
     Generates a chat response using RAG, filtered by company_id, with conversational memory.
     """
-    global _memory_store # Access the global memory store
+    global _memory_store
 
     if llm_instance is None or embeddings_instance is None:
-        logger.error("LLM or Embeddings not initialized. Cannot generate chat response.")
+        logger.error(
+            "LLM or Embeddings not initialized. Cannot generate chat response."
+        )
         return "AI components are not ready. Please try again later."
 
     if _vectorstore is None:
         logger.error("Vector store not initialized. Cannot perform RAG.")
-        return "Vector database is not ready. Please upload balance sheets."
+        return "Vector database is not ready. Please upload financial data."
 
     try:
         memory_key = f"chat_history_company_{company_id}"
@@ -229,11 +393,12 @@ def generate_chat_response(user_query, company_id, llm_instance, embeddings_inst
 
         system_prompt = (
             "You are a financial analyst AI assistant specializing in balance sheet analysis. "
-            f"You have access to balance sheet data for company ID {company_id}. "
+            f"You have access to structured financial data for company ID {company_id}. "
             "Use the provided context to answer questions about financial metrics, trends, and insights. "
             "Be precise, analytical, and provide specific numbers from the data when available. "
             "If you cannot find relevant information in the context, clearly state that. "
-            "Keep your responses concise but informative.\n\n"
+            "Keep your responses concise but informative. "
+            "Only use the information provided in the context.\n\n"
             "Context:\n{context}"
         )
 
@@ -254,17 +419,26 @@ def generate_chat_response(user_query, company_id, llm_instance, embeddings_inst
             {"input": user_query, "chat_history": chat_history}
         )
 
-        memory.save_context({"input": user_query}, {"answer": response["answer"]})
+        memory.save_context(
+            {"input": user_query}, {"answer": response["answer"]}
+        )
 
-        response_text = response.get("answer", "I cannot answer this question based on the available financial data.")
+        response_text = response.get(
+            "answer",
+            "I cannot answer this question based on the available financial data.",
+        )
         source_docs = response.get("context", [])
+
+        # --- ADD THIS DEBUG PRINT ---
+        logger.info(f"Retrieved context documents: {source_docs}")
+        # ---------------------------
 
         if source_docs:
             source_info = "\n\nSources:"
             unique_sources = set()
             for doc in source_docs:
-                if 'source' in doc.metadata:
-                    unique_sources.add(doc.metadata['source'])
+                if "source" in doc.metadata:
+                    unique_sources.add(doc.metadata["source"])
             if unique_sources:
                 source_info += "\n" + ", ".join(list(unique_sources))
                 response_text += source_info
@@ -272,6 +446,7 @@ def generate_chat_response(user_query, company_id, llm_instance, embeddings_inst
         return response_text
 
     except Exception as e:
-        logger.error(f"Error generating chat response for company_id {company_id}: {e}")
+        logger.error(
+            f"Error generating chat response for company_id {company_id}: {e}"
+        )
         return f"An internal error occurred while processing your request: {str(e)}"
-
