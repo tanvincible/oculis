@@ -133,7 +133,7 @@ Frontend will run on `http://localhost:5173`.
 
 ## Using Oculis
 
-* **Login** using credentials from the [docs/]() directory.
+* **Login** using credentials from the [docs/](https://tanvincible.github.io/oculis) directory.
 * **Select a Company** or create a new one.
 * **Upload Financial Data** via the Dashboard.
 * **Chat with AI** with queries like:
