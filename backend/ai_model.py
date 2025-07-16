@@ -177,7 +177,7 @@ def process_structured_financial_data(
 
             # First, delete existing vectors for this company and year to prevent duplicates/stale data
             # You need to ensure delete_vectors_for_balance_sheet accepts int for company_id and year
-            delete_vectors_for_balance_sheet(company_id, year)
+            delete_vectors_for_balance_sheet(company_id)
 
             # Then, delete existing SQL DB entry for this company and year
             existing_bs_entry = (
@@ -324,9 +324,7 @@ def process_structured_financial_data(
         return {"status": "error", "message": str(e)}
 
 
-# Ensure delete_vectors_for_balance_sheet also handles company_id and year as integers
-# (Already discussed in previous response for the error fix)
-def delete_vectors_for_balance_sheet(company_id, year):
+def delete_vectors_for_balance_sheet(company_id):
     global _vectorstore
     if _vectorstore is None:
         logger.warning(
@@ -336,20 +334,14 @@ def delete_vectors_for_balance_sheet(company_id, year):
 
     try:
         deleted_ids = _vectorstore.delete(
-            where={
-                "$and": [
-                    {"company_id": {"$eq": company_id}},
-                    {"year": {"$eq": year}},
-                ]
-            }
+            where={"company_id": {"$eq": company_id}}
         )
-        # _vectorstore.persist() # Remove if on ChromaDB 0.4.x+
         logger.info(
-            f"Deleted vectors for company_id={company_id}, year={year}. Deleted IDs: {deleted_ids}"
+            f"Deleted vectors for company_id={company_id}. Deleted IDs: {deleted_ids}"
         )
     except Exception as e:
         logger.error(
-            f"Error deleting vectors for company_id={company_id}, year={year}: {e}"
+            f"Error deleting vectors for company_id={company_id}: {e}"
         )
 
 

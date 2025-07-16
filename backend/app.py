@@ -615,12 +615,10 @@ def create_app():
             return jsonify({"error": "No file part"}), 400
         if "company_id" not in request.form:
             return jsonify({"error": "Company ID is required"}), 400
-        if "year" not in request.form:
-            return jsonify({"error": "Year is required"}), 400
 
         file = request.files["file"]
         company_id = request.form["company_id"]
-        year = int(request.form["year"])
+        year = None
 
         if file.filename == "":
             return jsonify({"error": "No selected file"}), 400
@@ -650,24 +648,20 @@ def create_app():
             # Delete existing balance sheet data and vectors for this company and year
             # This ensures we don't have duplicate or old data for the same year/company
             existing_bs = BalanceSheet.query.filter_by(
-                company_id=company_id, year=year
+                company_id=company_id
             ).first()
             if existing_bs:
                 db.session.delete(existing_bs)
                 db.session.commit()
                 logger.info(
-                    f"Deleted existing balance sheet entry for Company ID: {company_id}, Year: {year}"
+                    f"Deleted existing balance sheet entry for Company ID: {company_id}"
                 )
-                # Also delete associated vectors from ChromaDB
-                delete_vectors_for_balance_sheet(
-                    company_id, year
-                )  # Ensure this function is updated too
+                delete_vectors_for_balance_sheet(company_id)
 
             # Process the structured financial data from the uploaded file
             processed_data = process_structured_financial_data(
                 filepath,
                 company_id,
-                year,
                 embeddings,  # Pass embeddings for vector store update
                 db.session,  # Pass db session for saving to BalanceSheet model
             )
@@ -691,9 +685,9 @@ def create_app():
             return (
                 jsonify(
                     {
+                        "status": "success",
                         "message": "Balance sheet uploaded and processed successfully",
                         "company_id": company_id,
-                        "year": year,
                         "filename": filename,
                         "extracted_metrics": {
                             "revenue": processed_data.get("revenue"),
@@ -764,7 +758,7 @@ def create_app():
         try:
             delete_vectors_for_balance_sheet(company_id, year)
             logger.info(
-                f"Deleted vector embeddings for Company ID: {company_id}, Year: {year}"
+                f"Deleted vector embeddings for Company ID: {company_id}"
             )
 
             db.session.delete(balance_sheet)
@@ -806,7 +800,7 @@ def create_app():
 
         balance_sheets = (
             BalanceSheet.query.filter_by(company_id=company_id)
-            .order_by(BalanceSheet.year)
+            .order_by(BalanceSheet.year.desc())
             .all()
         )
 
@@ -932,4 +926,5 @@ if __name__ == "__main__":
     app = create_app()  # Create the app instance using the factory
     with app.app_context():
         db.create_all()
+
     app.run(debug=True)
