@@ -1,3 +1,3 @@
 # Summary
 
-- [Chapter 1](Login credentials)
+- [Login Credentials](login-cred.md)
