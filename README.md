@@ -38,7 +38,6 @@ This README provides a quickstart guide to get **Oculis** up and running on your
 - React Router DOM: For client-side routing.
 - Tailwind CSS: Utility-first CSS framework.
 - React Icons: UI icons.
-- Axios: HTTP client.
 - Vite: Frontend build tool.
 
 ## Prerequisites
