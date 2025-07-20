@@ -3,12 +3,16 @@
 Welcome to **Oculis**, an AI-powered financial assistant designed to help users analyze and query financial data for various companies.  
 This project demonstrates a **Retrieval-Augmented Generation (RAG)** system, allowing you to upload balance sheet data and ask natural language questions about it.
 
+> [!IMPORTANT]
+> The web app is publicly hosted at [https://oculis.vercel.app](https://oculis.vercel.app).  
+> The login credentials are available at [https://tanvincible.github.io/oculis](https://tanvincible.github.io/oculis). 
+
 This README provides a quickstart guide to get **Oculis** up and running on your local machine in a few easy steps.
 
 > [!NOTE]  
-> This project is a take-home assignment for an internship recruitment.  
+> This project is a **take-home** assignment for an internship recruitment.  
 > The **project** report is at [oculis-report.pdf](https://github.com/tanvincible/oculis/blob/main/oculis-report.pdf).  
-> The presentation is available at [oculis-ppt.pdf](https://github.com/tanvincible/oculis/blob/main/oculis-ppt.pdf).
+> The **presentation** is available at [oculis-ppt.pdf](https://github.com/tanvincible/oculis/blob/main/oculis-ppt.pdf).
 
 ## Features
 
