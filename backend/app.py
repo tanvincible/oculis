@@ -123,7 +123,14 @@ def create_app():
     # Initialize CORS for your frontend origin
     CORS(
         app,
-        resources={r"/api/*": {"origins": "http://localhost:5173"}},
+        resources={
+            r"/api/*": {
+                "origins": [
+                    "http://localhost:5173",
+                    "https://oculis.vercel.app",
+                ]
+            }
+        },
         supports_credentials=True,  # Allow cookies/authentication headers to be sent
         methods=[
             "GET",
@@ -131,15 +138,15 @@ def create_app():
             "PUT",
             "DELETE",
             "OPTIONS",
-        ],  # Explicitly allow methods
+        ],
         allow_headers=[
             "Content-Type",
             "Authorization",
-        ],  # Explicitly allow headers
+        ],
     )
 
-    db.init_app(app)  # Initialize SQLAlchemy with the app
-    jwt = JWTManager(app)  # Initialize JWTManager with the app
+    db.init_app(app)
+    jwt = JWTManager(app)
 
     # Initialize AI components
     global llm, embeddings, vectorstore
@@ -158,7 +165,7 @@ def create_app():
     def seed_db_command(force):
         """Initializes the database and seeds initial users and companies."""
         with app.app_context():
-            db.create_all()  # Ensure tables are created
+            db.create_all()
 
             if force or not User.query.first():
                 logger.info("Seeding initial users and companies...")
@@ -290,7 +297,7 @@ def create_app():
 
     # --- Register Blueprints/Routes here (for a larger app) ---
     # For this MVP, we'll keep routes directly in app.py for simplicity,
-    # but in a production app, you'd register blueprints here.
+    # but in a production app, we'd register blueprints here.
 
     # --- Authentication and User Management Routes ---
     @app.route("/api/register", methods=["POST"])
@@ -899,7 +906,7 @@ def create_app():
         # Check if DB has at least one user to confirm connection/tables
         db_connected = False
         try:
-            with app.app_context():  # Ensure we are in app context for DB query
+            with app.app_context():
                 db_connected = db.session.query(User).first() is not None
         except Exception as e:
             logger.error(f"Database health check failed: {e}")

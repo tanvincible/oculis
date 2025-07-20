@@ -11,7 +11,8 @@ export default function ChatInterface({ companyId, companyName }) {
     const [error, setError] = useState(null);
     const messagesEndRef = useRef(null);
 
-    // State for file upload
+    // State for file upload (Note: This component should ideally only handle chat. File upload logic is in BalanceSheetUploader)
+    // Keeping it for now as per original code, but it's redundant if BalanceSheetUploader is used separately.
     const [file, setFile] = useState(null);
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState(null);
@@ -64,6 +65,8 @@ export default function ChatInterface({ companyId, companyName }) {
         }
     };
 
+    // This handleFileUpload seems to be a duplicate of the one in BalanceSheetUploader.
+    // It's recommended to remove it from here if BalanceSheetUploader is used elsewhere.
     const handleFileUpload = async (e) => {
         e.preventDefault();
         if (!file || !companyId || uploading) {
@@ -127,23 +130,24 @@ export default function ChatInterface({ companyId, companyName }) {
         const isSystem = msg.sender === 'system';
         const isError = msg.type === 'error'; // Added type check for error messages
 
-        let bubbleClasses = 'max-w-[75%] p-3 rounded-xl shadow-sm text-base';
-        let containerClasses = `flex mb-3 ${isUser ? 'justify-end' : 'justify-start'}`;
+        // Adjusted classes for mobile responsiveness
+        let bubbleClasses = 'max-w-[85%] sm:max-w-[75%] p-2 sm:p-3 rounded-xl shadow-sm text-sm sm:text-base';
+        let containerClasses = `flex mb-2 sm:mb-3 ${isUser ? 'justify-end' : 'justify-start'}`;
 
         if (isUser) {
             bubbleClasses += ' bg-blue-600 text-white rounded-br-none';
         } else if (isAI) {
             bubbleClasses += ` ${isError ? 'bg-red-100 text-red-800' : 'bg-gray-100 text-gray-800'} rounded-bl-none`;
         } else if (isSystem) {
-            bubbleClasses += ` ${isError ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-800'} text-sm italic`;
+            bubbleClasses += ` ${isError ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-800'} text-xs sm:text-sm italic`;
             containerClasses += ' justify-center'; // Center system messages
         }
 
         return (
             <div key={index} className={containerClasses}>
                 <div className={`${bubbleClasses} animate-fade-in`}>
-                    {isError && (isAI || isSystem) && <FaTimesCircle className="inline-block mr-2 text-lg align-middle" />}
-                    {isSystem && !isError && <FaInfoCircle className="inline-block mr-2 text-lg align-middle" />}
+                    {isError && (isAI || isSystem) && <FaTimesCircle className="inline-block mr-1 sm:mr-2 text-base sm:text-lg align-middle" />}
+                    {isSystem && !isError && <FaInfoCircle className="inline-block mr-1 sm:mr-2 text-base sm:text-lg align-middle" />}
                     {msg.text}
                 </div>
             </div>
@@ -152,31 +156,31 @@ export default function ChatInterface({ companyId, companyName }) {
 
 
     return (
-        <div className="grid grid-rows-[auto_1fr_auto] h-full bg-white rounded-xl shadow-2xl p-6 border border-gray-100 font-sans">
-            <div className="flex justify-between items-center mb-3 pb-2 border-b border-gray-200">
-                <h2 className="text-2xl font-extrabold text-gray-900 m-0">
-                    AI Financial Assistant: {companyName || 'Select Company'}
+        <div className="grid grid-rows-[auto_1fr_auto] h-full bg-white rounded-xl shadow-2xl p-4 sm:p-6 border border-gray-100 font-sans">
+            <div className="flex flex-col sm:flex-row justify-between items-center mb-3 pb-2 border-b border-gray-200">
+                <h2 className="text-xl sm:text-2xl font-extrabold text-gray-900 m-0 text-center sm:text-left mb-2 sm:mb-0">
+                    AI Financial Assistant: <span className="block sm:inline">{companyName || 'Select Company'}</span>
                 </h2>
                 {companyId && (
                     <button
                         onClick={handleClearChat}
-                        className="text-sm font-medium text-gray-500 hover:text-red-600 transition-colors duration-200 flex items-center px-3 py-1 rounded-full border border-gray-300 hover:border-red-400"
+                        className="text-xs sm:text-sm font-medium text-gray-500 hover:text-red-600 transition-colors duration-200 flex items-center px-2 py-1 sm:px-3 sm:py-1 rounded-full border border-gray-300 hover:border-red-400"
                         title="Clear chat history for this company"
                     >
-                        <FaTrashAlt className="mr-1 text-base" /> Clear Chat
+                        <FaTrashAlt className="mr-1 text-sm sm:text-base" /> Clear Chat
                     </button>
                 )}
             </div>
 
             {/* Chat Messages Display */}
-            <div className="flex-1 overflow-y-auto p-4 border border-gray-200 rounded-lg mb-4 bg-gray-50 shadow-inner custom-scrollbar">
+            <div className="flex-1 overflow-y-auto p-2 sm:p-4 border border-gray-200 rounded-lg mb-4 bg-gray-50 shadow-inner custom-scrollbar">
                 {messages.length === 0 && !loading ? (
-                    <div className="text-center text-gray-500 mt-10 p-4 bg-gray-100 rounded-lg">
-                        <FaInfoCircle className="inline-block text-4xl text-blue-400 mb-2" />
-                        <p className="text-lg font-medium">
+                    <div className="text-center text-gray-500 mt-5 sm:mt-10 p-2 sm:p-4 bg-gray-100 rounded-lg">
+                        <FaInfoCircle className="inline-block text-3xl sm:text-4xl text-blue-400 mb-2" />
+                        <p className="text-base sm:text-lg font-medium">
                             Start by asking a question about {companyName ? `${companyName}'s financials` : 'the selected company'}...
                         </p>
-                        <p className="text-sm text-gray-500 mt-1">
+                        <p className="text-xs sm:text-sm text-gray-500 mt-1">
                             You can also upload new financial data using the section above.
                         </p>
                     </div>
@@ -184,8 +188,8 @@ export default function ChatInterface({ companyId, companyName }) {
                     messages.map(renderMessage)
                 )}
                 {loading && (
-                    <div className="flex justify-start mb-3">
-                        <div className="bg-gray-100 text-gray-800 p-3 rounded-xl rounded-bl-none shadow-sm text-base animate-pulse">
+                    <div className="flex justify-start mb-2 sm:mb-3">
+                        <div className="bg-gray-100 text-gray-800 p-2 sm:p-3 rounded-xl rounded-bl-none shadow-sm text-sm sm:text-base animate-pulse">
                             <span className="dot-pulse"></span>
                             <span className="dot-pulse delay-100"></span>
                             <span className="dot-pulse delay-200"></span>
@@ -202,20 +206,20 @@ export default function ChatInterface({ companyId, companyName }) {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     placeholder={companyId ? `Ask about ${companyName}'s financial details...` : "Please select a company first..."}
-                    className="flex-1 px-5 py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-base shadow-sm transition-all duration-200 text-gray-900"
+                    className="flex-1 px-3 py-2 sm:px-5 sm:py-3 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm sm:text-base shadow-sm transition-all duration-200 text-gray-900"
                 />
                 <button
                     type="submit"
                     disabled={!input.trim() || loading || !companyId}
-                    className={`px-5 py-3 rounded-full font-bold text-white transition-colors duration-200 flex items-center justify-center shadow-md
+                    className={`px-4 py-2 sm:px-5 sm:py-3 rounded-full font-bold text-white transition-colors duration-200 flex items-center justify-center shadow-md
                                 ${(!input.trim() || loading || !companyId) ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800'}`}
                 >
                     {loading ? <FaSpinner className="animate-spin" /> : <FaPaperPlane />}
                 </button>
             </form>
-            {error && <p className="text-red-600 text-sm mt-2 flex items-center"><FaTimesCircle className="mr-1" /> {error}</p>}
+            {error && <p className="text-red-600 text-xs sm:text-sm mt-2 flex items-center"><FaTimesCircle className="mr-1" /> {error}</p>}
             {!companyId && (
-                <p className="text-orange-600 text-sm mt-2 flex items-center">
+                <p className="text-orange-600 text-xs sm:text-sm mt-2 flex items-center">
                     <FaInfoCircle className="mr-1" /> Please select a company from the sidebar to enable chat.
                 </p>
             )}

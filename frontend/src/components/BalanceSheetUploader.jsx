@@ -46,9 +46,9 @@ export default function BalanceSheetUploader({ companyId, companyName }) {
     };
 
     return (
-        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-6 rounded-xl shadow-2xl border border-blue-200 mb-6 font-sans">
-            <h2 className="text-2xl font-bold text-blue-900 mb-4 flex items-center">
-                <FaFileUpload className="mr-3 text-3xl" /> Upload Balance Sheet
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-4 sm:p-6 rounded-xl shadow-2xl border border-blue-200 mb-6 font-sans">
+            <h2 className="text-xl sm:text-2xl font-bold text-blue-900 mb-4 flex items-center">
+                <FaFileUpload className="mr-2 sm:mr-3 text-2xl sm:text-3xl" /> Upload Balance Sheet
             </h2>
 
             <form onSubmit={handleFileUpload} className="flex flex-col md:flex-row gap-4 items-stretch">
@@ -57,17 +57,17 @@ export default function BalanceSheetUploader({ companyId, companyName }) {
                         type="file"
                         accept=".csv,.xlsx"
                         onChange={(e) => setFile(e.target.files[0])}
-                        className="block w-full file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0
+                        className="block w-full file:mr-4 file:py-2 file:px-4 sm:file:py-3 sm:file:px-6 file:rounded-lg file:border-0
                                     file:bg-indigo-100 file:text-indigo-800 file:font-bold hover:file:bg-indigo-200
                                     text-sm text-gray-700 transition duration-200"
                     />
-                    {file && <p className="text-sm text-gray-600 mt-1">Selected: {file.name}</p>}
+                    {file && <p className="text-xs sm:text-sm text-gray-600 mt-1">Selected: {file.name}</p>}
                 </label>
 
                 <button
                     type="submit"
                     disabled={!file || uploading || !companyId}
-                    className={`w-full md:w-auto flex items-center justify-center gap-2 font-bold text-white px-6 py-3 rounded-lg transition
+                    className={`w-full md:w-auto flex-shrink-0 flex items-center justify-center gap-2 font-bold text-white px-4 py-2 sm:px-6 sm:py-3 rounded-lg transition
                         ${(!file || uploading || !companyId)
                             ? 'bg-gray-400 cursor-not-allowed'
                             : 'bg-green-600 hover:bg-green-700 active:bg-green-800 shadow-md'}`}

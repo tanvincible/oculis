@@ -32,6 +32,7 @@ export default function DashboardPage() {
     const [companiesLoading, setCompaniesLoading] = useState(true);
     const [companiesError, setCompaniesError] = useState(null);
     const [activeNavItem, setActiveNavItem] = useState('dashboard'); // State for active navigation item
+    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false); // State for mobile menu visibility
 
     const fetchCompanies = useCallback(async () => {
         if (!user) { // Only fetch if user is authenticated
@@ -74,6 +75,7 @@ export default function DashboardPage() {
 
     const handleNavItemClick = (itemId) => {
         setActiveNavItem(itemId);
+        setIsMobileMenuOpen(false); // Close mobile menu on item click
     };
 
     if (authLoading) {
@@ -100,10 +102,47 @@ export default function DashboardPage() {
     const userNavItems = navItems[user.role] || [];
 
     return (
-        <div className="flex min-h-screen w-screen bg-gray-50 font-inter">
-            {/* Sidebar */}
-            <aside className="sticky top-0 h-screen w-64 bg-neutral-900 shadow-2xl p-6 flex flex-col rounded-r-xl border-r border-neutral-800">
-                <div className="text-3xl font-extrabold text-white mb-8 tracking-tight">Oculis</div>
+        <div className="flex flex-col md:flex-row min-h-screen w-screen bg-gray-50 font-inter">
+            {/* Mobile Header and Hamburger Icon */}
+            <header className="md:hidden flex items-center justify-between p-4 bg-neutral-900 shadow-md">
+                <div className="text-2xl font-extrabold text-white tracking-tight">Oculis</div>
+                <button
+                    onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                    className="text-white focus:outline-none"
+                    aria-label="Toggle navigation"
+                >
+                    {isMobileMenuOpen ? (
+                        <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    ) : (
+                        <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    )}
+                </button>
+            </header>
+
+            {/* Sidebar (Desktop sticky, Mobile fixed full screen when open) */}
+            <aside className={`
+                ${isMobileMenuOpen ? 'fixed inset-0 z-50 flex flex-col w-full' : 'hidden'}
+                md:flex md:flex-col md:w-64 md:sticky md:top-0 md:h-screen
+                bg-neutral-900 shadow-2xl p-6 rounded-r-xl border-r border-neutral-800
+            `}>
+                <div className="flex justify-between items-center md:block">
+                    <div className="text-3xl font-extrabold text-white mb-8 tracking-tight">Oculis</div>
+                    {isMobileMenuOpen && (
+                        <button
+                            onClick={() => setIsMobileMenuOpen(false)}
+                            className="md:hidden text-white focus:outline-none absolute top-4 right-4"
+                            aria-label="Close navigation"
+                        >
+                            <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    )}
+                </div>
                 <nav className="flex-grow">
                     <ul className="space-y-2">
                         {userNavItems.map(item => (
@@ -111,7 +150,7 @@ export default function DashboardPage() {
                                 <button
                                     onClick={() => handleNavItemClick(item.id)}
                                     className={`w-full text-left px-5 py-3 rounded-xl font-medium text-lg transition-all duration-200
-                            ${activeNavItem === item.id
+                                        ${activeNavItem === item.id
                                             ? 'bg-blue-600 text-white shadow-lg ring-2 ring-blue-400'
                                             : 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700 hover:text-white'
                                         }`}
@@ -136,7 +175,7 @@ export default function DashboardPage() {
             </aside>
 
             {/* Main Content */}
-            <main className="flex-1 p-8 overflow-y-auto">
+            <main className="flex-1 p-4 md:p-8 overflow-y-auto">
                 {activeNavItem === 'dashboard' && (
                     <>
                         <h1 className="text-3xl font-bold text-gray-900 mb-6">Dashboard</h1>

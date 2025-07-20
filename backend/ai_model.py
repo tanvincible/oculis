@@ -101,11 +101,6 @@ def initialize_ai_components():
     return _llm, _embeddings, _vectorstore
 
 
-# backend/ai_model.py
-
-# ... (existing imports and initialization) ...
-
-
 def process_structured_financial_data(
     filepath, company_id, embeddings, db_session
 ):
@@ -215,7 +210,6 @@ def process_structured_financial_data(
             )
 
             # Convert to float, handle non-numeric data
-            # (Your existing robust conversion logic is good here)
             try:
                 extracted_revenue = (
                     float(extracted_revenue)
@@ -301,8 +295,6 @@ def process_structured_financial_data(
 
         if documents_for_chroma:
             _vectorstore.add_documents(documents_for_chroma)
-            # The deprecation warning for .persist() means this line can be removed if using ChromaDB 0.4.x+
-            # If you are on an older version or want to be explicit, keep it.
             # _vectorstore.persist()
             logger.info(
                 f"Successfully loaded {len(documents_for_chroma)} structured data chunks into vector store for company {company_id} across multiple years."
@@ -421,9 +413,7 @@ def generate_chat_response(
         )
         source_docs = response.get("context", [])
 
-        # --- ADD THIS DEBUG PRINT ---
-        logger.info(f"Retrieved context documents: {source_docs}")
-        # ---------------------------
+        # logger.info(f"Retrieved context documents: {source_docs}")
 
         if source_docs:
             source_info = "\n\nSources:"

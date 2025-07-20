@@ -32,9 +32,9 @@ export default function FinancialCharts({ companyId, companyName }) {
         fetchCompanyMetrics();
     }, [fetchCompanyMetrics]);
 
-    if (loading) return <div className="p-6 text-gray-800">Loading financial charts for {companyName}...</div>;
-    if (error) return <div className="p-6 text-red-600">Error loading charts: {error}</div>;
-    if (!metrics || metrics.years.length === 0) return <div className="p-6 text-gray-600">No financial data available for {companyName}</div>;
+    if (loading) return <div className="p-4 sm:p-6 text-gray-800">Loading financial charts for {companyName}...</div>;
+    if (error) return <div className="p-4 sm:p-6 text-red-600">Error loading charts: {error}</div>;
+    if (!metrics || metrics.years.length === 0) return <div className="p-4 sm:p-6 text-gray-600">No financial data available for {companyName}</div>;
 
     const { years, revenue, netIncome, assets, liabilities, currency } = metrics;
     const unit = currency === 'INR' ? '₹' : '$';
@@ -48,9 +48,9 @@ export default function FinancialCharts({ companyId, companyName }) {
     })).reverse();
 
     const renderLineChart = (title, dataKey, color) => (
-        <div className="mb-8 p-6 bg-white rounded-2xl shadow-xl border border-gray-300">
-            <h3 className="text-2xl font-bold text-gray-900 mb-5">{title} ({unit})</h3>
-            <ResponsiveContainer width="100%" height={320}>
+        <div className="mb-4 sm:mb-6 md:mb-8 p-4 sm:p-6 bg-white rounded-xl sm:rounded-2xl shadow-xl border border-gray-300">
+            <h3 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 mb-4">{title} ({unit})</h3>
+            <ResponsiveContainer width="100%" height={260}>
                 <LineChart data={chartData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                     <XAxis dataKey="year" stroke="#6b7280" />
@@ -60,15 +60,15 @@ export default function FinancialCharts({ companyId, companyName }) {
                         formatter={(val) => `${unit}${val?.toLocaleString()}`}
                     />
                     <Legend />
-                    <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={3} dot={{ r: 4 }} />
+                    <Line type="monotone" dataKey={dataKey} stroke={color} strokeWidth={3} dot={{ r: 3 }} />
                 </LineChart>
             </ResponsiveContainer>
         </div>
     );
 
     return (
-        <div className="p-8 bg-gray-50 min-h-screen">
-            <h2 className="text-3xl font-extrabold text-gray-900 mb-8 tracking-tight">
+        <div className="p-4 sm:p-6 md:p-8 bg-gray-50">
+            <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold text-gray-900 mb-4 sm:mb-6 md:mb-8 tracking-tight">
                 Financial Charts for {companyName}
             </h2>
             {renderLineChart('Revenue', 'Revenue', '#3b82f6')}
